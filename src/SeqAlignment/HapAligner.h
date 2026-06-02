@@ -18,6 +18,10 @@ class HapAligner {
   std::vector<HapBlock*> rev_blocks_;
   std::vector<int32_t> repeat_starts_;
   std::vector<int32_t> repeat_ends_;
+
+  // Per-aligner scratch buffers reused by process_read. HapAligner instances are
+  // not shared between worker threads, so these remove hot-path allocations
+  // without adding synchronization.
   std::vector<double> base_log_wrong_buf_;
   std::vector<double> base_log_correct_buf_;
   std::vector<double> l_match_matrix_buf_;
@@ -87,36 +91,24 @@ class HapAligner {
     delete rev_haplotype_;
   }
 
-  /** 
+  /**
    * Returns the 0-based index into the sequence string that should be used as the seed for alignment or -1 if no valid seed exists
    **/
   int calc_seed_base(const Alignment& alignment);
 
   /**
-   * Beginning of attempting to implement read-parallelism here
-   * 
-   * alignments: full vector of reads or pooled reads to align
-   * begin: first index in alignments this call should handle
-   * end -> end-1 is last index handled
-   * init_read_index: offset into global output arrays
-   * base_quality: lookup object to convert quality characters into log-probs
-   * realign_read: boolean vector, if false, skip that read
-   * aln_probs: output buffer storing per-read, per-haplotype alignment likelihoods
-   * for read i: block starts at aln_probs + i * fw_haplotype_->num_combs()
-   * seed_positions: output bugger storing chosen seed base for each read
-   * 
-   * Gives each worker different subrange to work on, while aln_probs and seed_positions are shared
-   * but each worker can only write to its corresponding sections
+   * Align a half-open subrange of reads into the shared output arrays. Callers
+   * assign disjoint ranges, so each worker writes only its own probability and
+   * seed-position slots.
    */
-
-   void process_reads_range(const std::vector<Alignment>& alignments,
-                            int begin,
-                            int end,
-                            int init_read_index,
-                            const BaseQuality* base_quality,
-                            const std::vector<bool>& realign_read,
-                            double* aln_probs,
-                            int* seed_positions);
+  void process_reads_range(const std::vector<Alignment>& alignments,
+			   int begin,
+			   int end,
+			   int init_read_index,
+			   const BaseQuality* base_quality,
+			   const std::vector<bool>& realign_read,
+			   double* aln_probs,
+			   int* seed_positions);
 
   void process_read(const Alignment& aln, int seed_base, const BaseQuality* base_quality, bool retrace_aln,
 		    double* prob_ptr, AlignmentTrace& traced_aln);

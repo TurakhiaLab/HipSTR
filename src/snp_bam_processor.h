@@ -19,6 +19,9 @@ const double OTHER_HAP_LL       = -1000.0; // Log-likelihood read comes from a h
 
 class SNPBamProcessor : public BamProcessor {
 private:
+  // Shared SNP VCF/tracker state is read while multiple regions are in flight.
+  // The stats lock protects aggregate counters; the phase lock protects reader
+  // traversal and haplotype-tracker updates.
   std::mutex snp_stats_mutex_;
   std::mutex snp_phase_mutex_;
 
@@ -53,6 +56,10 @@ private:
 	SNPBamProcessor& operator=(const SNPBamProcessor& other);
 
 protected:
+	bool prepare_region_work_item(RegionWorkItem& item, std::ostream& logger);
+
+	// Pipeline hook that computes SNP phasing likelihoods before genotyping.
+	// Results are stored in RegionWorkItem so the genotyper stage is self-contained.
 	bool prepare_read_phasing(std::vector<BamAlnList>& paired_strs_by_rg,
 				  std::vector<BamAlnList>& mate_pairs_by_rg,
 				  std::vector<BamAlnList>& unpaired_strs_by_rg,
@@ -64,8 +71,6 @@ protected:
 				  std::vector< std::vector<double> >& log_p2s,
 				  std::ostream& logger,
           double* phase_time_out);
-
-	bool prepare_region_work_item(RegionWorkItem& item, std::ostream& logger);
 
 public:
  SNPBamProcessor(bool use_bam_rgs, bool remove_pcr_dups) : BamProcessor(use_bam_rgs, remove_pcr_dups){

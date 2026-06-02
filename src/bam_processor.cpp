@@ -690,7 +690,8 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   // Add the chromosome information to the VCF
   init_output_vcf(fasta_file, chroms, full_command);
 
-  //region ordering
+  // Results may complete out of order. Hold them until every preceding region
+  // has been written so VCF, log, BAM, and auxiliary outputs match BED order.
   std::map<size_t, std::unique_ptr<RegionResult>> pending_results;
   size_t next_result_to_write = 0;
 
@@ -718,6 +719,8 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   int merge_type = BamCramMultiReader::ORDER_ALNS_BY_FILE;
   size_t next_region = 0;
 
+  // Load each chromosome sequence once and share the stable string storage with
+  // all pipeline lines. This replaces per-line FASTA copies of large contigs.
   std::shared_mutex chrom_cache_mutex;
   std::map<std::string, std::string> chrom_cache;
   auto get_chrom_seq = [&](const std::string& chrom) -> const std::string* {
@@ -762,7 +765,8 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
       size_t my_idx = next_region++;
       work_items[pf.line()] = std::make_unique<RegionWorkItem>(my_idx, RegionGroup(regions[my_idx]));
     }},
-    // STAGE 1: All real per-region work happens here in parallel.
+    // STAGE 1: fetch reads, optional SNP phasing prep, and genotype the region.
+    // Per-line readers/trimmers avoid shared htslib state in this parallel pipe.
     tf::Pipe{tf::PipeType::PARALLEL, [&](tf::Pipeflow& pf) {
       if (!work_items[pf.line()])
         return;
@@ -824,7 +828,8 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
 
       results[pf.line()] = std::move(result);
     }},
-    // STAGE 2
+    // STAGE 2: serial collection point. The actual writes happen only when all
+    // earlier regions have finished.
     tf::Pipe{tf::PipeType::SERIAL, [&](tf::Pipeflow& pf) {
 
       auto& ctx = contexts[pf.line()];

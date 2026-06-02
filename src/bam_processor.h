@@ -205,15 +205,11 @@ class BamProcessor {
  int32_t MAX_TOTAL_READS;       // Skip loci where the number of STR reads passing all filters exceeds this limit
 	 char    BASE_QUAL_TRIM;        // Trim boths ends of the read until encountering a base with quality greater than this threshold
 	 //bool    TOO_MANY_READS;        // Flag set if the current locus being processed as too many reads
-	 int     NUM_THREADS;           // Number of Taskflow pipeline lines/worker threads
+	 int     NUM_THREADS;           // Number of Taskflow executor worker threads
 
-	 /**
-	  * Pipeline code
-  */
-
-
-
-  //output of read/filter stage
+  // Per-region data produced by the serial fetch/filter stage and consumed by
+  // the parallel genotyping stage. chrom_seq points into the shared chromosome
+  // cache owned by process_regions and remains valid for the full run.
   struct RegionWorkItem {
 		size_t region_idx = 0;
 		RegionGroup region_group;
@@ -238,6 +234,8 @@ class BamProcessor {
 
 	  };
 
+	  // Buffered VCF record used so worker threads can build text in parallel
+	  // while the final writer preserves the original BED order.
 	  struct VCFRecord {
 	    std::string chrom;
 	    int32_t pos;
@@ -247,11 +245,12 @@ class BamProcessor {
 	    VCFRecord() : pos(-1), valid(false) {}
 	  };
 
-	  //output of genotype stage
+	  // Complete output for one region. Worker threads fill this structure;
+	  // write_region_result performs the ordered serial writes and counter merge.
 	  struct RegionResult {
 		size_t region_idx = 0;
 	    std::string chrom;
-	    int32_t pos = -1; //??
+	    int32_t pos = -1;
 	    std::vector<VCFRecord> vcf_records;
 	    std::string log_text;
 	    std::string viz_text;
@@ -281,6 +280,8 @@ class BamProcessor {
 		std::vector<FilteredBamRecord> filtered_bam_records;
 	  };
 
+	  // Resources that are expensive or unsafe to share across pipeline lines.
+	  // Each line owns its reader and trimmer for the duration of the run.
 	  struct PipelineLineContext {
 		std::unique_ptr<BamCramMultiReader> reader;
 		std::unique_ptr<AdapterTrimmer> adapter_trimmer;
@@ -304,10 +305,13 @@ class BamProcessor {
 
 	  virtual bool prepare_region_work_item(RegionWorkItem& item, std::ostream& logger) { return true; }
 
+	  // Subclasses do the locus-specific work here and must not write shared
+	  // output streams directly; place output in RegionResult instead.
 	  virtual void process_region_item(
 	    RegionWorkItem& item,
 	    RegionResult& result) = 0;
 
+	  // Runs serially in BED order after a region finishes.
 	  virtual void write_region_result(
 	    const RegionResult& result) = 0;
 };

@@ -980,6 +980,8 @@ double SeqStutterGenotyper::compute_allele_bias(int hap_a_read_count, int hap_b_
   int min_count = std::min(hap_a_read_count, hap_b_read_count);
   double pvalue;
   {
+    // cephes' bdtr uses shared internal state on some builds; serialize the
+    // call so parallel region workers do not corrupt allele-bias p-values.
     std::lock_guard<std::mutex> lock(cephes_mutex);
     pvalue = 2*bdtr(min_count, total, 0.5); // Two-sided pvalue
   }
@@ -1013,6 +1015,8 @@ void SeqStutterGenotyper::write_vcf_record(const std::vector<std::string>& sampl
 void SeqStutterGenotyper::build_vcf_record(const std::vector<std::string>& sample_names, int hap_block_index, const Region& region, const std::string& chrom_seq,
 					   BuiltVCFRecord& record, std::ostream& logger,
 					   bool output_viz, bool viz_left_alns, std::ostream* html_output){
+  // Build the exact text write_vcf_record used to stream directly. The caller
+  // can now generate records in parallel and commit them later in region order.
 	  std::stringstream out;
 	  out.precision(2);
 	  out.setf(std::ios::fixed, std::ios::floatfield);

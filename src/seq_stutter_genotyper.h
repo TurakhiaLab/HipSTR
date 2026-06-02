@@ -195,8 +195,7 @@ class SeqStutterGenotyper : public Genotyper {
   bool recompute_stutter_models(std::ostream& logger, int max_total_haplotypes, int max_flank_haplotypes, double min_flank_freq,
 				int max_em_iter, double abs_ll_converge, double frac_ll_converge);
 
-  //pipeline struct
-
+  // Text form of a VCF record built by worker threads before serial output.
   struct BuiltVCFRecord {
     std::string chrom;
     int32_t pos;

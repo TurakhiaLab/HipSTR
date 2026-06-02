@@ -55,6 +55,8 @@ bool SNPBamProcessor::prepare_region_work_item(RegionWorkItem& item, std::ostrea
   bool prepared = false;
   double phase_time = 0;
   if(needs_serial_snp_state){
+    // VCFReader iteration and HaplotypeTracker updates are stateful, so keep
+    // this preparation step serialized when those inputs are active.
     std::lock_guard<std::mutex> lock(snp_phase_mutex_);
     prepared = prepare_read_phasing(item.paired_strs_by_rg, item.mate_pairs_by_rg, item.unpaired_strs_by_rg,
                 item.rg_names, item.region_group, *item.chrom_seq,

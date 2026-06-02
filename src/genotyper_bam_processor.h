@@ -258,19 +258,13 @@ public:
   // If this flag is set, HTML alignments are written for both the haplotype alignments and Needleman-Wunsch left alignments
   int VIZ_LEFT_ALNS;
 
-  /**
-   * Begin pipeline code
-   */
-
+  // Pipeline entry point for one region after read filtering and SNP phasing
+  // have been prepared in RegionWorkItem.
   void process_region_item(RegionWorkItem& item,
     RegionResult& result);
   
+  // Serial writer/merger for buffered output and aggregate counters.
   void write_region_result(const RegionResult& result);
-  
-
-   /**
-    * End pipeline code
-    */
 };
 
 #endif

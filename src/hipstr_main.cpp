@@ -1,12 +1,19 @@
 #include <climits>
+#include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 #include <fstream>
 #include <getopt.h>
 #include <iostream>
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 #include <stdlib.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -27,6 +34,49 @@ bool is_file(const std::string& name){
   struct stat st_buf;
   stat(name.c_str(), &st_buf);
   return (S_ISREG (st_buf.st_mode));
+}
+
+int positive_env_value(const char* name){
+  const char* value = getenv(name);
+  if (value == NULL || *value == '\0')
+    return 0;
+
+  char* end = NULL;
+  errno = 0;
+  long parsed = strtol(value, &end, 10);
+  if (errno == 0 && end != value && *end == '\0' && parsed > 0 && parsed <= INT_MAX)
+    return (int)parsed;
+  return 0;
+}
+
+int default_thread_count(){
+  // Prefer scheduler-provided CPU allocations when present. This keeps the
+  // automatic default friendly to cluster jobs that run on a subset of a node.
+  const char* scheduler_vars[] = {
+    "SLURM_CPUS_PER_TASK",
+    "SLURM_CPUS_ON_NODE",
+    "PBS_NP",
+    "NSLOTS",
+    "OMP_NUM_THREADS"
+  };
+  for (const char* var : scheduler_vars){
+    int value = positive_env_value(var);
+    if (value > 0)
+      return value;
+  }
+
+#ifdef __linux__
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  if (sched_getaffinity(0, sizeof(cpuset), &cpuset) == 0){
+    int available = CPU_COUNT(&cpuset);
+    if (available > 0)
+      return available;
+  }
+#endif
+
+  unsigned int detected = std::thread::hardware_concurrency();
+  return std::max(1u, detected == 0 ? 1u : detected);
 }
 
 void print_usage(int def_mdist, int def_min_reads, int def_max_reads, int def_max_str_len, int def_max_haplotypes, int def_max_flanks, double def_min_flank_freq){
@@ -94,7 +144,7 @@ void print_usage(int def_mdist, int def_min_reads, int def_max_reads, int def_ma
 	    << "\t" << "--version                             "  << "\t" << "Print HipSTR version and exit"                                                        << "\n"
 	    << "\t" << "--quiet                               "  << "\t" << "Only output terse logging messages (Default = output all messages)"                   << "\n"
 		    << "\t" << "--silent                              "  << "\t" << "Don't output any logging messages  (Default = output all messages)"                   << "\n"
-		    << "\t" << "--threads            <num_threads>    "  << "\t" << "Number of Taskflow pipeline lines to use (Default = 1)"                               << "\n"
+		    << "\t" << "--threads            <num_threads>    "  << "\t" << "Number of Taskflow executor worker threads to use (Default = auto)"                  << "\n"
 		    << "\t" << "--def-stutter-model                   "  << "\t" << "For each locus, use a stutter model with PGEOM=0.9 and UP=DOWN=0.05 for in-frame"     << "\n"
 	    << "\t" << "                                      "  << "\t" << " artifacts and PGEOM=0.9 and UP=DOWN=0.01 for out-of-frame artifacts"                 << "\n"
 	    << "\t" << "--chrom              <chrom>          "  << "\t" << "Only consider STRs on this chromosome"                                                << "\n"
@@ -363,6 +413,7 @@ int main(int argc, char** argv){
   std::string full_command = full_command_ss.str();
 
   GenotyperBamProcessor bam_processor(true, true);
+  bam_processor.NUM_THREADS = default_thread_count();
 
   int bam_lib_from_samp = 0, skip_genotyping = 0;
   std::string bamfile_string="", bamlist_string="", rg_sample_string="", rg_lib_string="", hap_chr_string="", hap_chr_file="";
@@ -375,6 +426,8 @@ int main(int argc, char** argv){
 
   if (!log_file.empty())
     bam_processor.set_log(log_file);
+  bam_processor.full_logger() << "Using " << bam_processor.NUM_THREADS
+			      << " Taskflow executor thread(s)" << std::endl;
 
   if (bamfile_string.empty() && bamlist_string.empty())
     printErrorAndDie("You must specify either the --bams or --bam-files option");

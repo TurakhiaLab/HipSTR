@@ -596,6 +596,8 @@ void HapAligner::process_read(const Alignment& aln, int seed_base, const BaseQua
   assert(seed_base != -1);
   assert(aln.get_sequence().size() == aln.get_base_qualities().size());
 
+  // resize preserves capacity, so after the largest read at a locus these calls
+  // usually return existing storage instead of allocating fresh DP matrices.
   auto ensure_double_scratch = [](std::vector<double>& buffer, size_t size) -> double* {
     if (buffer.size() < size)
       buffer.resize(size);

@@ -399,6 +399,8 @@ void GenotyperBamProcessor::analyze_reads_and_phasing(std::vector<BamAlnList>& a
 }
 
 void GenotyperBamProcessor::process_region_item(RegionWorkItem& item, RegionResult& result){
+  // Move the fetch/filter output into the result first so ordered writing can
+  // still emit BAM records even if genotyping records an early skip.
   result.region_idx = item.region_idx;
   result.log_text = item.log_text;
   result.bam_seek_time = item.bam_seek_time;
@@ -412,6 +414,8 @@ void GenotyperBamProcessor::process_region_item(RegionWorkItem& item, RegionResu
 }
 
 void GenotyperBamProcessor::write_region_result(const RegionResult& result) {
+  // This runs on the serial pipeline stage, so it is safe to update aggregate
+  // counters and write shared output streams here.
   total_bam_seek_time_    += result.bam_seek_time; 
   total_read_filter_time_ += result.read_filter_time;
   too_few_reads_ += result.too_few_reads;
