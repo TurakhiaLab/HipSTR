@@ -1,0 +1,6 @@
+[submodule "lib/taskflow"]
+	path = lib/taskflow
+	url = https://github.com/taskflow/taskflow.git
+[submodule "lib/mimalloc"]
+	path = lib/mimalloc
+	url = https://github.com/microsoft/mimalloc.git
