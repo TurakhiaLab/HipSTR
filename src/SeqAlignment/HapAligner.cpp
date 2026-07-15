@@ -71,7 +71,7 @@ void HapAligner::align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
       StutterAlignerClass* stutter_aligner = haplotype->get_block(block_index)->get_stutter_aligner(block_option);
       stutter_aligner->load_read(seq_len, seq_0+seq_len-1, base_log_wrong+seq_len-1, base_log_correct+seq_len-1);
 
-      std::vector<double> block_probs(num_stutter_artifacts); // Reuse in each iteration to avoid reallocation penalty
+      block_probs_buf_.resize(num_stutter_artifacts); // Reuse in each iteration to avoid reallocation penalty
       int offset = seq_len-1;
       for (int j = 0; j < seq_len; ++j, ++matrix_index, --offset){
 	// Consider valid range of insertions and deletions, including no stutter artifact
@@ -84,19 +84,19 @@ void HapAligner::align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
 	  if (base_len >= 0){
 	    double prob          = stutter_aligner->align_stutter_region_reverse(base_len, seq_0+j, offset, base_log_wrong+j, base_log_correct+j, artifact_size, art_pos);
 	    double pre_prob      = (j-base_len < 0 ? 0 : match_matrix[j-base_len + prev_row_index]);
-	    block_probs[art_idx] = rep_info->log_prob_pcr_artifact(block_option, artifact_size) + prob + pre_prob;
+	    block_probs_buf_[art_idx] = rep_info->log_prob_pcr_artifact(block_option, artifact_size) + prob + pre_prob;
 	  }
 	  else
-	    block_probs[art_idx] = IMPOSSIBLE;
-	  if (block_probs[art_idx] > best_LL){
+	    block_probs_buf_[art_idx] = IMPOSSIBLE;
+	  if (block_probs_buf_[art_idx] > best_LL){
 	    artifact_size_ptr[j] = artifact_size;
 	    artifact_pos_ptr[j]  = art_pos;
-	    best_LL              = block_probs[art_idx];
+	    best_LL              = block_probs_buf_[art_idx];
 	  }
 	  art_idx++;
 	}
 
-	match_matrix[matrix_index]    = fast_log_sum_exp(block_probs);
+	match_matrix[matrix_index]    = fast_log_sum_exp(block_probs_buf_);
 	insert_matrix[matrix_index]   = IMPOSSIBLE;
 	deletion_matrix[matrix_index] = IMPOSSIBLE;
       }
@@ -136,20 +136,24 @@ void HapAligner::align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
 	  continue;
 	}
 
-	std::vector<double> match_probs; match_probs.reserve(3); // Reuse for each iteration to avoid reallocation penalty
+	
 	for (int j = 1; j < seq_len; ++j, ++matrix_index){
-	  // Compute all match-related deletion probabilities (including normal read extension, where k = 1)
-	  match_probs.push_back(insert_matrix[matrix_index-1]           + LOG_MATCH_TO_INS[homopolymer_len]);
-	  match_probs.push_back(match_matrix[matrix_index-seq_len-1]    + LOG_MATCH_TO_MATCH[homopolymer_len]);
-	  match_probs.push_back(deletion_matrix[matrix_index-seq_len-1] + LOG_MATCH_TO_DEL[homopolymer_len]);
+	  const double from_insert =
+      insert_matrix[matrix_index - 1] + LOG_MATCH_TO_INS[homopolymer_len];
+    const double from_match =
+      match_matrix[matrix_index - seq_len - 1] + LOG_MATCH_TO_MATCH[homopolymer_len];
+    const double from_delete =
+      deletion_matrix[matrix_index - seq_len - 1] + LOG_MATCH_TO_DEL[homopolymer_len];
 
-	  double match_emit             = (seq_0[j] == hap_char ? base_log_correct[j] : base_log_wrong[j]);
-	  match_matrix[matrix_index]    = match_emit          + std::max(match_probs[0], std::max(match_probs[1], match_probs[2]));
+    const double match_emit =
+      seq_0[j] == hap_char ? base_log_correct[j] : base_log_wrong[j];
+
+    match_matrix[matrix_index] =
+      match_emit + std::max(from_insert, std::max(from_match, from_delete));
+	  
 	  insert_matrix[matrix_index]   = base_log_correct[j] + std::max(match_matrix[matrix_index-seq_len-1] + LOG_INS_TO_MATCH,
 									insert_matrix[matrix_index-1]         + LOG_INS_TO_INS);
-	  deletion_matrix[matrix_index] = std::max(match_matrix[matrix_index-seq_len]    + LOG_DEL_TO_MATCH,
-						   deletion_matrix[matrix_index-seq_len] + LOG_DEL_TO_DEL);
-	  match_probs.clear();
+	  deletion_matrix[matrix_index] = 
 	}	
       }
     }

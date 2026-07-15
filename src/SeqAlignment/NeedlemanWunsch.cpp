@@ -203,8 +203,7 @@ namespace NeedlemanWunsch {
     float s1, s2, s3;
     int c;
 
-    std::vector<int> ref_base_ints, read_base_ints;
-    ref_base_ints.reserve(L1); read_base_ints.reserve(L2);
+    std::vector<int> ref_base_ints(L1), read_base_ints(L2);
     for (unsigned int i = 0; i < refseq.size(); i++)
       ref_base_ints[i] = base_to_int(refseq[i]);
     for (unsigned int i = 0; i < readseq.size(); i++)
@@ -474,8 +473,7 @@ namespace NeedlemanWunsch {
     float s1, s2, s3;
     IndelTracker t1, t2, t3;
 
-    std::vector<int> ref_base_ints, read_base_ints;
-    ref_base_ints.reserve(L1); read_base_ints.reserve(L2);
+    std::vector<int> ref_base_ints(L1), read_base_ints(L2);
     for (unsigned int i = 0; i < refseq.size(); i++)
       ref_base_ints[i] = base_to_int(refseq[i]);
     for (unsigned int i = 0; i < readseq.size(); i++)

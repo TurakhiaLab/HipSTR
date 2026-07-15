@@ -74,6 +74,7 @@ class HapAligner {
     fw_haplotype_   = haplotype;
     rev_haplotype_  = haplotype->reverse(rev_blocks_);
     realign_to_hap_ = realign_to_haplotype;
+    std::vector<double> block_probs_buf_;
 
     for (int i = 0; i < fw_haplotype_->num_blocks(); i++){
       HapBlock* block = fw_haplotype_->get_block(i);
