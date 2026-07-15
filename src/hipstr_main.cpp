@@ -174,7 +174,7 @@ void parse_command_line_args(int argc, char** argv,
 			     std::string& bamfile_string,     std::string& bamlist_string,    std::string& rg_sample_string,  std::string& rg_lib_string,
 			     std::string& haploid_chr_string, std::string& hap_chr_file,      std::string& fasta_file,        std::string& region_file,   std::string& snp_vcf_file,
 			     std::string& chrom,              std::string& bam_pass_out_file, std::string& bam_filt_out_file, std::string& ref_vcf_file,
-			     std::string& str_vcf_out_file,   std::string& fam_file,          std::string& log_file,
+			     std::string& str_vcf_out_file,   std::string& fam_file,          std::string& log_file, std::string& lib_field,
 			     int& bam_lib_from_samp, int& skip_genotyping, GenotyperBamProcessor& bam_processor){
   int def_mdist             = bam_processor.MAX_MATE_DIST;
   int def_min_reads         = bam_processor.MIN_TOTAL_READS;
@@ -311,6 +311,9 @@ void parse_command_line_args(int argc, char** argv,
       if (bam_processor.MAX_TOTAL_HAPLOTYPES <= 1)
 	printErrorAndDie("--max-haps must be greater than 1");
       break;
+    case 'L':
+      lib_field = std::string(optarg);
+      break;
     case 'l':
       log_file = std::string(optarg);
       break;
@@ -414,6 +417,7 @@ int main(int argc, char** argv){
   for (int i = 1; i < argc; i++)
     full_command_ss << " " << argv[i];
   std::string full_command = full_command_ss.str();
+  std::string lib_field = "LB";  // Default to LB field
 
   GenotyperBamProcessor bam_processor(true, true);
   bam_processor.NUM_THREADS = default_thread_count();
@@ -425,7 +429,7 @@ int main(int argc, char** argv){
 
   parse_command_line_args(argc, argv,
 			  bamfile_string, bamlist_string, rg_sample_string, rg_lib_string, hap_chr_string, hap_chr_file, fasta_file, region_file, snp_vcf_file,
-			  chrom, bam_pass_out_file, bam_filt_out_file, ref_vcf_file, str_vcf_out_file, fam_file, log_file, bam_lib_from_samp, skip_genotyping, bam_processor);
+			  chrom, bam_pass_out_file, bam_filt_out_file, ref_vcf_file, str_vcf_out_file, fam_file, log_file, lib_field, bam_lib_from_samp, skip_genotyping, bam_processor);
 
   if (!log_file.empty())
     bam_processor.set_log(log_file);
@@ -508,9 +512,9 @@ int main(int argc, char** argv){
       for (auto rg_iter = read_groups.begin(); rg_iter != read_groups.end(); rg_iter++){
 	if (!rg_iter->HasID())     printErrorAndDie("RG in BAM/CRAM header is lacking the ID tag");
 	if (!rg_iter->HasSample()) printErrorAndDie("RG in BAM/CRAM header is lacking the SM tag");
-	if ((bam_lib_from_samp == 0) && !rg_iter->HasLibrary())
-	  printErrorAndDie("RG in BAM/CRAM header is lacking the LB tag");
-	std::string rg_library = (bam_lib_from_samp == 0 ? rg_iter->GetLibrary() : rg_iter->GetSample());
+	if ((bam_lib_from_samp == 0) && !rg_iter->HasTag(lib_field))
+    printErrorAndDie("RG in BAM/CRAM header is lacking the " + lib_field + " tag");
+std::string rg_library = (bam_lib_from_samp == 0 ? rg_iter->GetTag(lib_field) : rg_iter->GetSample());
 
 	// Ensure that there aren't identical read group ids that map to different samples or libraries
 	if (rg_ids_to_sample.find(rg_iter->GetID()) != rg_ids_to_sample.end())

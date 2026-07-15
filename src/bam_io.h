@@ -35,6 +35,9 @@ public:
   }
 };
 
+
+
+
 class BamAlignment {
 private:
   std::string bases_;
@@ -90,19 +93,27 @@ public:
 
   /* Number of bases */
   int32_t Length()              const { return length_;  }
+
   /* 0-based position where alignment starts*/
   int32_t Position()            const { return pos_;     }
+
   /* Non-inclusive end position of alignment */
   int32_t GetEndPosition()      const { return end_pos_; }
+
   /* Name of the read */
   std::string Name()            const { return std::string(bam_get_qname(b_)); }
+
   /* Name of the read's reference sequence */
   const std::string& Ref()      const { return ref_;              }
+
   /* Mapping quality score*/
   uint16_t MapQuality()         const { return b_->core.qual;     }
+
   const std::string& MateRef()  const { return mate_ref_;         }
+
   /* 0-based position where mate's alignment starts */
   int32_t MatePosition()        const { return b_->core.mpos;     }
+
   /* Name of file from which the alignment was read */
   const std::string& Filename() const { return file_;             }
   
@@ -132,6 +143,26 @@ public:
 
   bool HasTag(const char tag[2]) const { return bam_aux_get(b_, tag) != NULL; }
 
+  /*
+  bool AddCharTag(const char tag[2], char& value){
+    if (HasTag(tag))
+      return false;
+    return (bam_aux_append(b_, tag, 'A', 1, (uint8_t*)&value) == 0);
+  }
+
+  bool AddIntTag(const char tag[2], int64_t& value){
+    if (HasTag(tag))
+      return false;
+    return (bam_aux_append(b_, tag, 'i', ___, (uint8_t*)&value) == 0);
+  }
+
+  bool AddFloatTag(const char tag[2], double& value){
+    if (HasTag(tag))
+      return false;
+    return (bam_aux_append(b_, tag, 'f', ___, (uint8_t*)&value) == 0);
+  }
+  */
+
   bool AddStringTag(const char tag[2], const std::string& value){
     if (HasTag(tag))
       return false;
@@ -143,7 +174,7 @@ public:
     if (tag_data == NULL)
       return false;
     value = bam_aux2A(tag_data);
-    return true; 
+    return true; // TO DO: Check errno
   }
 
   bool GetIntTag(const char tag[2], int64_t& value) const {
@@ -151,7 +182,7 @@ public:
     if (tag_data == NULL)
       return false;
     value = bam_aux2i(tag_data);
-    return true; 
+    return true; // TO DO: Check errno
   }
 
   bool GetFloatTag(const char tag[2], double& value) const {
@@ -159,7 +190,7 @@ public:
     if (tag_data == NULL)
       return false;
     value = bam_aux2f(tag_data);
-    return true; 
+    return true; // TO DO: Check errno
   }
   
   bool GetStringTag(const char tag[2], std::string& value) const{
@@ -168,7 +199,7 @@ public:
       return false;
     char* ptr = bam_aux2Z(tag_data);
     value = std::string(ptr);
-    return true; 
+    return true; // TO DO: Check errno
   }  
 
   bool IsDuplicate()         const { return (b_->core.flag & BAM_FDUP)         != 0;}
@@ -181,7 +212,8 @@ public:
   bool IsProperPair()        const { return (b_->core.flag & BAM_FPROPER_PAIR) != 0;}
   bool IsFirstMate()         const { return (b_->core.flag & BAM_FREAD1)       != 0;}
   bool IsSecondMate()        const { return (b_->core.flag & BAM_FREAD2)       != 0;}
-
+  bool IsSupplementary()     const { return (b_->core.flag & BAM_FSUPPLEMENTARY)         != 0;}
+ 
   bool StartsWithSoftClip(){
     if (!built_) ExtractSequenceFields();
     if (cigar_ops_.empty())
@@ -267,38 +299,65 @@ public:
     if (ok) b_->core.flag |= BAM_FREAD2;
     else    b_->core.flag &= (~BAM_FREAD2);
   }
-
+  void SetIsSupplementary(bool ok){
+    if (ok) b_->core.flag |= BAM_FSUPPLEMENTARY;
+    else    b_->core.flag &= (~BAM_FSUPPLEMENTARY);
+  }
+  /*
+   *  Trim an alignment that extends too far upstream or downstream of the provided region or has low base qualities on the ends
+   *  Trims until either i) the base quality exceeds the provided threshold or ii) the alignment is fully within the provided region bounds
+   *  Modifies the alignment such that subsequent calls to each function reflect the trimmming
+   *  However, if the aligment is written to a new BAM file, the original alignment will be output
+   */
   void TrimAlignment(int32_t min_read_start, int32_t max_read_stop, char min_base_qual='~');
+
   void TrimLowQualityEnds(char min_base_qual);
+
   void TrimNumBases(int left_trim, int right_trim);
 };
 
+
 std::string BuildCigarString(const std::vector<CigarOp>& cigar_data);
+
 
 class ReadGroup {
  private:
-  std::string id_;
-  std::string sample_;
-  std::string library_;
+  std::map<std::string, std::string> tag_dict_;
 
  public:
   ReadGroup(){}
 
-  ReadGroup(const std::string& id, const std::string& sample, const std::string& library)
-    : id_(id), sample_(sample), library_(library){}
+  ReadGroup(const std::string& id, const std::string& sample, const std::string& library){
+    SetID(id);
+    SetSample(sample);
+    SetLibrary(library);
+  }
 
-  bool HasID()      const { return !id_.empty();      }
-  bool HasSample()  const { return !sample_.empty();  }
-  bool HasLibrary() const { return !library_.empty(); }
+  bool HasTag(const std::string& tag) const {
+    return tag_dict_.find(tag) != tag_dict_.end();
+  }
+  bool HasID()      const { return HasTag("ID"); }
+  bool HasSample()  const { return HasTag("SM"); }
+  bool HasLibrary() const { return HasTag("LB"); }
 
-  const std::string& GetID()      const { return id_;      }
-  const std::string& GetSample()  const { return sample_;  }
-  const std::string& GetLibrary() const { return library_; }
+  const std::string& GetTag(const std::string& tag) const {
+    auto iter = tag_dict_.find(tag);
+    if (iter == tag_dict_.end())
+      printErrorAndDie("Read group does not contain a " + tag + " tag");
+    return iter->second;
+  }
+  const std::string& GetID()      const { return GetTag("ID"); }
+  const std::string& GetSample()  const { return GetTag("SM"); }
+  const std::string& GetLibrary() const { return GetTag("LB"); }
 
-  void SetID(const std::string& id)          { id_      = id;      }
-  void SetSample(const std::string& sample)  { sample_  = sample;  }
-  void SetLibrary(const std::string& library){ library_ = library; }
+  void SetTag(const std::string& tag, const std::string& value){
+    tag_dict_[tag] = value;
+  }
+  void SetID(const std::string& id)          { SetTag("ID", id);      }
+  void SetSample(const std::string& sample)  { SetTag("SM", sample);  }
+  void SetLibrary(const std::string& library){ SetTag("LB", library); }
 };
+
 
 class BamHeader {
  protected:
@@ -329,6 +388,7 @@ class BamHeader {
     return read_groups_;
   }
 
+
   int32_t num_seqs() const { return header_->n_targets; }
   int32_t ref_id(const std::string& ref) const {
     auto iter = seq_indices_.find(ref);
@@ -354,6 +414,7 @@ class BamHeader {
 
 void compare_bam_headers(const BamHeader* hdr_a, const BamHeader* hdr_b, const std::string& file_a, const std::string& file_b);
 
+
 class BamMultiHeader : public BamHeader {
  private:
   std::string base_file_name_;
@@ -367,7 +428,10 @@ class BamMultiHeader : public BamHeader {
   }
 
   void add_header(const BamHeader* header, const std::string& file_name){
+    // Ensure that the header sequences are consistent
     compare_bam_headers(this, header, base_file_name_, file_name);
+
+    // Add the read groups
     parse_read_groups(header->header_->text);
     read_groups_by_file_.push_back(read_groups_);
     read_groups_.clear();
@@ -376,24 +440,30 @@ class BamMultiHeader : public BamHeader {
   const std::vector<ReadGroup>& read_groups(int file_index) const { return read_groups_by_file_[file_index]; }
 };
 
+
+
+
 class BamCramReader {
 private:
   samFile   *in_;
   bam_hdr_t *hdr_;
   hts_idx_t *idx_;
   std::string path_;
-  BamHeader* header_;
+  BamHeader*  header_;
   bool shared_header_;
   bool cram_done_;
 
-  hts_itr_t *iter_;        
-  std::string chrom_;      
-  int32_t     start_;      
-  int32_t     end_;        
-  uint64_t    min_offset_; 
-  BamAlignment first_aln_; 
+  // Instance variables for the most recently set region
+  hts_itr_t *iter_;        // Iterator
+  std::string chrom_;      // Chromosome
+  int32_t     start_;      // Start position
+  int32_t     end_;        // End position
+  uint64_t    min_offset_; // Offset after first alignment. For BAMs, this is a memory offset, while for CRAMs its
+                           // the index of the first alignment in the CRAM slice
+  BamAlignment first_aln_; // First alignment
   bool reuse_first_aln_;
 
+  // Private unimplemented copy constructor and assignment operator to prevent operations
   BamCramReader(const BamCramReader& other);
   BamCramReader& operator=(const BamCramReader& other);
 
@@ -412,7 +482,11 @@ public:
   ~BamCramReader();
 
   bool GetNextAlignment(BamAlignment& aln);
+
+  // Prepare the BAM/CRAM for reading the entire chromosome
   bool SetChromosome(const std::string& chrom);
+  
+  // Prepare the BAM/CRAM for reading all alignments overlapping the provided region
   bool SetRegion(const std::string& chrom, int32_t start, int32_t end);
 
   void use_shared_header(BamHeader* header){
@@ -427,6 +501,11 @@ public:
   }
 };
 
+
+
+
+
+
 class BamCramMultiReader {
  private:
   std::vector<BamCramReader*> bam_readers_;
@@ -436,10 +515,12 @@ class BamCramMultiReader {
   int merge_type_;
   BamMultiHeader* multi_header_;
 
-  std::string chrom_;      
-  int32_t     start_;      
-  int32_t     end_;        
+  // Instance variables for the most recently set region
+  std::string chrom_;      // Chromosome
+  int32_t     start_;      // Start position
+  int32_t     end_;        // End position
 
+  // Private unimplemented copy constructor and assignment operator to prevent operations
   BamCramMultiReader(const BamCramMultiReader& other);
   BamCramMultiReader& operator=(const BamCramMultiReader& other);
 
@@ -480,13 +561,22 @@ class BamCramMultiReader {
   const BamHeader* bam_header() const { return multi_header_; }
 
   bool SetRegion(const std::string& chrom, int32_t start, int32_t end);
+
   bool GetNextAlignment(BamAlignment& aln);
 };
+
+
+
+
+
+
+
 
 class BamWriter {
  private:
   BGZF* output_;
 
+  // Private unimplemented copy constructor and assignment operator to prevent operations
   BamWriter(const BamWriter& other);
   BamWriter& operator=(const BamWriter& other);
 
@@ -496,7 +586,6 @@ class BamWriter {
     output_ = bgzf_open(path.c_str(), mode.c_str());
     if (output_ == NULL)
       printErrorAndDie("Failed to open BAM output file");
-    
     if (bam_hdr_write(output_, bam_header->header_) == -1)
       printErrorAndDie("Failed to write the BAM header to the output file");
   }

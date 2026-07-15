@@ -32,6 +32,12 @@ class SeqStutterGenotyper : public Genotyper {
   BaseQuality base_quality_;
   ReadPooler pooler_;
   int* pool_index_;                               // Pool index for each read
+  std::vector<std::string> lflank_seqs_;
+  std::vector<std::string> rflank_seqs_;
+  std::vector<int> hap_to_lflank_;
+  std::vector<int> hap_to_rflank_;
+  bool output_lflanks_;
+  bool output_rflanks_;
 
   typedef std::vector<Alignment> AlnList;
   AlnList alns_;                                  // Vector of left-aligned alignments
@@ -75,7 +81,7 @@ class SeqStutterGenotyper : public Genotyper {
 		       std::vector<int>& old_to_new, std::vector<int>& new_to_old);
 
   // Extract the sequences for each allele and the VCF start position
-  void get_alleles(const Region& region, int block_index, const std::string& chrom_seq,
+  std::pair<int,int> get_alleles(const Region& region, int block_index, const std::string& chrom_seq,
 		   int32_t& pos, std::vector<std::string>& alleles);
 
   void debug_sample(int sample_index, std::ostream& logger);
@@ -160,6 +166,8 @@ class SeqStutterGenotyper : public Genotyper {
     total_hap_build_time_  = total_hap_aln_time_  = 0;
     total_aln_trace_time_  = total_assembly_time_ = 0;
     ref_vcf_               = ref_vcf;
+    output_lflanks_ = false;
+    output_rflanks_ = false;
     assert(num_reads_ == alns_.size());
     init(stutter_models, chrom_seq, logger);
   }

@@ -694,8 +694,9 @@ void SeqStutterGenotyper::reorder_alleles(std::vector<std::string>& alleles,
   }
 }
 
-void SeqStutterGenotyper::get_alleles(const Region& region, int block_index, const std::string& chrom_seq,
-				      int32_t& pos, std::vector<std::string>& alleles){
+std::pair<int,int> SeqStutterGenotyper::get_alleles(const Region& region, int block_index, 
+                                                    const std::string& chrom_seq,
+                                                    int32_t& pos, std::vector<std::string>& alleles){
   assert(alleles.size() == 0);
 
   // Extract all the alleles
@@ -767,6 +768,8 @@ void SeqStutterGenotyper::get_alleles(const Region& region, int block_index, con
   }
 
   pos += 1; // Fix off-by-1 VCF error
+
+  return std::pair<int,int>(left_trim, right_trim);
 }
  
 void SeqStutterGenotyper::debug_sample(int sample_index, std::ostream& logger){
@@ -988,28 +991,17 @@ double SeqStutterGenotyper::compute_allele_bias(int hap_a_read_count, int hap_b_
   return log10(std::min(1.0, pvalue));
 }
 
-void SeqStutterGenotyper::write_vcf_record(
-	            const std::vector<std::string>& sample_names,
-	            const std::string& chrom_seq,
-		    bool output_viz, bool viz_left_alns,
-	            std::ostream& html_output, VCFWriter* vcf_writer,
-	            std::ostream& logger){
-  int region_index = 0;
-  for (int block_index = 0; block_index < haplotype_->num_blocks(); block_index++)
-    if (haplotype_->get_block(block_index)->get_repeat_info() != NULL)
-      write_vcf_record(sample_names, block_index, region_group_->regions()[region_index++], chrom_seq,
-		       output_viz, viz_left_alns, html_output, vcf_writer, logger);
-  assert(region_index == region_group_->num_regions());
-}
-
-void SeqStutterGenotyper::write_vcf_record(const std::vector<std::string>& sample_names, int hap_block_index, const Region& region, const std::string& chrom_seq,
-						   bool output_viz, bool viz_left_alns,
-						   std::ostream& html_output, VCFWriter* vcf_writer, std::ostream& logger){
-  BuiltVCFRecord record;
-  build_vcf_record(sample_names, hap_block_index, region, chrom_seq, record, logger,
-		   output_viz, viz_left_alns, &html_output);
-  if (record.valid)
-    vcf_writer->add_vcf_record(record.chrom, record.pos, record.text);
+void SeqStutterGenotyper::write_vcf_record(const std::vector<std::string>& sample_names, 
+                                           int hap_block_index, const Region& region, 
+                                           const std::string& chrom_seq,
+                                           bool output_viz, bool viz_left_alns,
+                                           std::ostream& html_output, VCFWriter* vcf_writer, 
+                                           std::ostream& logger) {
+    BuiltVCFRecord record;
+    build_vcf_record(sample_names, hap_block_index, region, chrom_seq, record, logger,
+                     output_viz, viz_left_alns, &html_output);
+    if (record.valid)
+        vcf_writer->add_vcf_record(record.chrom, record.pos, record.text);
 }
 
 void SeqStutterGenotyper::build_vcf_record(const std::vector<std::string>& sample_names, int hap_block_index, const Region& region, const std::string& chrom_seq,
@@ -1024,7 +1016,48 @@ void SeqStutterGenotyper::build_vcf_record(const std::vector<std::string>& sampl
   // Extract the alleles and position for the current haplotype block
   int32_t pos;
   std::vector<std::string> alleles;
-  get_alleles(region, hap_block_index, chrom_seq, pos, alleles);
+  std::pair<int, int> trimmings = get_alleles(region, hap_block_index, chrom_seq, pos, alleles);
+
+  // Add flank extraction logic
+  std::vector<std::string> lflank_seqs, rflank_seqs;
+  std::vector<int> hap_to_lflank, hap_to_rflank;
+  bool output_lflanks = false, output_rflanks = false;
+
+  if (OUTPUT_HAPLOTYPE_DATA) {
+      assert(hap_blocks_.size() == 3);
+      std::string ref_str_seq = haplotype_->get_block(1)->get_seq(0);
+      int ref_len = (int)ref_str_seq.size();
+      assert(trimmings.first < ref_len && trimmings.second < ref_len);
+      assert(trimmings.first + trimmings.second < ref_len);
+
+      haps_to_alleles(0, hap_to_lflank);
+      HapBlock* lflank_block = haplotype_->get_block(0);
+      int trim = trimmings.first;
+      for (int i = 0; i < lflank_block->num_options(); ++i) {
+          std::string seq = lflank_block->get_seq(i);
+          assert((int)seq.size() + trim > 0);
+          if (trim < 0)
+              lflank_seqs.push_back(seq.substr(0, (int)seq.size() + trim));
+          else
+              lflank_seqs.push_back(seq + ref_str_seq.substr(0, trim));
+      }
+
+      haps_to_alleles(2, hap_to_rflank);
+      HapBlock* rflank_block = haplotype_->get_block(2);
+      trim = trimmings.second;
+      for (int i = 0; i < rflank_block->num_options(); ++i) {
+          std::string seq = rflank_block->get_seq(i);
+          assert((int)seq.size() + trim > 0);
+          if (trim < 0)
+              rflank_seqs.push_back(seq.substr(trim));
+          else
+              rflank_seqs.push_back(ref_str_seq.substr(ref_len-trim, trim) + seq);
+      }
+
+      // Determine if we should output flanks
+      output_lflanks = (lflank_seqs.size() > 1);
+      output_rflanks = (rflank_seqs.size() > 1);
+  }
 
   //debug_sample(sample_indices_["LP6005442-DNA_D08"], logger);
   //std::vector<bool> clobbered;
@@ -1217,6 +1250,19 @@ void SeqStutterGenotyper::build_vcf_record(const std::vector<std::string>& sampl
       out << "," << allele_bp_diffs[new_to_old[i]];
     out << ";";
   }
+  if (OUTPUT_HAPLOTYPE_DATA) {
+    if (output_lflanks) {
+        out << ";LFLANKS=" << lflank_seqs[0];
+        for (unsigned int i = 1; i < lflank_seqs.size(); ++i)
+            out << "," << lflank_seqs[i];
+    }
+    
+    if (output_rflanks) {
+        out << ";RFLANKS=" << rflank_seqs[0];
+        for (unsigned int i = 1; i < rflank_seqs.size(); ++i)
+            out << "," << rflank_seqs[i];
+    }
+}
 
   // Compute INFO field values for DP, DSTUTTER and DFLANKINDEL and add them to the VCF
   int32_t tot_dp = 0, tot_dsnp = 0, tot_dstutter = 0, tot_dflankindel = 0;
@@ -1272,13 +1318,19 @@ void SeqStutterGenotyper::build_vcf_record(const std::vector<std::string>& sampl
   if (OUTPUT_PLS == 1)       out << ":PL";
   if (!haploid_ && (OUTPUT_PHASED_GLS == 1))
     out << ":PHASEDGL";
-  if (OUTPUT_HAPLOTYPE_DATA) out << ":HQ:PHQ";
+  if (OUTPUT_HAPLOTYPE_DATA) 
+    out << (output_lflanks || output_rflanks ? ":HQ:PHQ" : "") 
+        << (output_lflanks ? ":LFGT" : "") 
+        << (output_rflanks ? ":RFGT" : "");
   if (OUTPUT_FILTERS == 1)   out << ":FILTER";
 
   // Build the missing genotype string
   // Exclude OUTPUT_FILTERS, as we won't use that to build the missing genotype string
   num_fields += ((output_allele_bias ? 2 : 0) + (output_strand_bias ? 1 : 0)) + (!haploid_ && (OUTPUT_PHASED_GLS == 1) ? 1 : 0);
-  num_fields += (OUTPUT_ALLREADS + OUTPUT_MALLREADS + OUTPUT_GLS + OUTPUT_PLS + 2*OUTPUT_HAPLOTYPE_DATA);
+  num_fields += (OUTPUT_ALLREADS + OUTPUT_MALLREADS + OUTPUT_GLS + OUTPUT_PLS + 
+               (output_lflanks || output_rflanks ? 2 : 0) + 
+               (output_lflanks ? 1 : 0) + 
+               (output_rflanks ? 1 : 0));
   std::stringstream empty_gt;
   for (int n = 0; n < num_fields; n++)
     empty_gt << ".:";
@@ -1447,8 +1499,24 @@ void SeqStutterGenotyper::build_vcf_record(const std::vector<std::string>& sampl
       }
     }
 
-    if (OUTPUT_HAPLOTYPE_DATA)
-      out << ":" << exp(hap_log_unphased_posteriors[sample_index]) << ":" << exp(hap_log_phased_posteriors[sample_index]);
+    if (OUTPUT_HAPLOTYPE_DATA && (output_lflanks || output_rflanks)) {
+        out << ":" << exp(hap_log_unphased_posteriors[sample_index]) 
+            << ":" << exp(hap_log_phased_posteriors[sample_index]);
+        
+        if (!haploid_) {
+            if (output_lflanks)
+                out << ":" << hap_to_lflank[haplotypes[sample_index].first] 
+                    << "|" << hap_to_lflank[haplotypes[sample_index].second];
+            if (output_rflanks)
+                out << ":" << hap_to_rflank[haplotypes[sample_index].first] 
+                    << "|" << hap_to_rflank[haplotypes[sample_index].second];
+        } else {
+            if (output_lflanks)
+                out << ":" << hap_to_lflank[haplotypes[sample_index].first];
+            if (output_rflanks)
+                out << ":" << hap_to_rflank[haplotypes[sample_index].first];
+        }
+    }
 
     // Reason for filtering the call, which is none if we made it here
     if (OUTPUT_FILTERS == 1)

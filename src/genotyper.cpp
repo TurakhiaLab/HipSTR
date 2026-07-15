@@ -279,6 +279,15 @@ std::string Genotyper::get_vcf_header(const std::string& fasta_path, const std::
       << "##INFO=<ID=" << "DSNP"           << ",Number=1,Type=Integer,Description=\"" << "Total number of reads with SNP phasing information"                           << "\">\n"
       << "##INFO=<ID=" << "DSTUTTER"       << ",Number=1,Type=Integer,Description=\"" << "Total number of reads with a stutter indel in the STR region"                 << "\">\n"
       << "##INFO=<ID=" << "DFLANKINDEL"    << ",Number=1,Type=Integer,Description=\"" << "Total number of reads with an indel in the regions flanking the STR"          << "\">\n";
+  if (OUTPUT_HAPLOTYPE_DATA == 1)
+    out << "##FORMAT=<ID=" << "HQ"   << ",Number=1,Type=Float,Description=\""  
+      << "Posterior probability of unphased haplotypes. Only output if 1 or more non-ref flanks were detected" << "\">" << "\n"
+      << "##FORMAT=<ID=" << "PHQ"  << ",Number=1,Type=Float,Description=\""  
+      << "Posterior probability of   phased haplotypes. Only output if 1 or more non-ref flanks were detected" << "\">" << "\n"
+      << "##FORMAT=<ID=" << "LFGT" << ",Number=1,Type=String,Description=\"" 
+      << "Genotype of  left flank with corresponding sequences reported in LFLANKS. Only output if 1 or more non-ref  left flanks were detected" << "\">" << "\n"
+      << "##FORMAT=<ID=" << "RFGT" << ",Number=1,Type=String,Description=\"" 
+      << "Genotype of right flank with corresponding sequences reported in RFLANKS. Only output if 1 or more non-ref right flanks were detected" << "\">" << "\n";
 
   // Format field descriptors
   out << "##FORMAT=<ID=" << "GT"          << ",Number=1,Type=String,Description=\""  << "Genotype" << "\">" << "\n"
@@ -292,15 +301,18 @@ std::string Genotyper::get_vcf_header(const std::string& fasta_path, const std::
       << "##FORMAT=<ID=" << "GLDIFF"      << ",Number=1,Type=Float,Description=\""   << "Difference in likelihood between the reported and next best genotypes"  << "\">" << "\n"
       << "##FORMAT=<ID=" << "DSTUTTER"    << ",Number=1,Type=Integer,Description=\"" << "Number of reads with a stutter indel in the STR region"        << "\">" << "\n"
       << "##FORMAT=<ID=" << "DFLANKINDEL" << ",Number=1,Type=Integer,Description=\"" << "Number of reads with an indel in the regions flanking the STR" << "\">" << "\n"
-      << "##FORMAT=<ID=" << "AB"          << ",Number=1,Type=Float,Description=\""
-      << "log10 of the allele bias pvalue, where 0 is no bias and more negative values are increasingly biased. 0 for all homozygous genotypes"  << "\">" << "\n"
+      << "##FORMAT=<ID=" << "AB"          << ",Number=1,Type=Float,Description=\""   << "log10 of the allele bias pvalue, "
+      << "where 0 is no bias and more negative values are increasingly biased. For homozygous genotypes, this can be negative if the haplotypes are heterozygous" << "\">" << "\n"
       << "##FORMAT=<ID=" << "FS"          << ",Number=1,Type=Float,Description=\""   << "log10 of the strand bias pvalue from Fisher's exact test, "
-      << "where 0 is no bias and more negative values are increasingly biased. 0 for all homozygous genotypes" << "\">" << "\n"
+      << "where 0 is no bias and more negative values are increasingly biased. For homozygous genotypes, this can be negative if the haplotypes are heterozygous" << "\">" << "\n"
       << "##FORMAT=<ID=" << "DAB"         << ",Number=1,Type=Integer,Description=\"" << "Number of reads used in the AB and FS calculations" << "\">" << "\n";
 
   if (OUTPUT_HAPLOTYPE_DATA == 1)
-    out << "##FORMAT=<ID=" << "HQ"  << ",Number=1,Type=Float,Description=\"" << "Posterior probability of unphased haplotypes" << "\">" << "\n"
-	<< "##FORMAT=<ID=" << "PHQ" << ",Number=1,Type=Float,Description=\"" << "Posterior probability of phased haplotypes"   << "\">" << "\n";
+    out << "##FORMAT=<ID=" << "HQ"   << ",Number=1,Type=Float,Description=\""  << "Posterior probability of unphased haplotypes. Only output if 1 or more non-ref flanks were detected" << "\">" << "\n"
+	<< "##FORMAT=<ID=" << "PHQ"  << ",Number=1,Type=Float,Description=\""  << "Posterior probability of   phased haplotypes. Only output if 1 or more non-ref flanks were detected" << "\">" << "\n"
+	<< "##FORMAT=<ID=" << "LFGT" << ",Number=1,Type=String,Description=\"" << "Genotype of  left flank with corresponding sequences reported in LFLANKS. Only output if 1 or more non-ref  left flanks were detected" << "\">" << "\n"
+	<< "##FORMAT=<ID=" << "RFGT" << ",Number=1,Type=String,Description=\"" << "Genotype of right flank with corresponding sequences reported in RFLANKS. Only output if 1 or more non-ref right flanks were detected" << "\">" << "\n";
+
   if (OUTPUT_ALLREADS == 1)
     out << "##FORMAT=<ID=" << "ALLREADS" << ",Number=1,Type=String,Description=\"" << "Base pair difference observed in each read's Needleman-Wunsch alignment" << "\">" << "\n";
   if (OUTPUT_MALLREADS == 1)

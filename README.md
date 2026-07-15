@@ -1,3 +1,10 @@
+# HipSTR (Gymrek-lab version)
+## This is fork of the [original repository](https://github.com/tfwillems/HipSTR.git) maintained by the Gymrek Lab.
+
+We have also developed [TRTools](https://trtools.readthedocs.io/en/stable/index.html) which has many useful utilities for processing output from HipSTR and other TR genotypers including filtering, merging, and computing basic statistics on VCF files with STR genotypes
+
+For questions on this HipSTR fork, please contact mgymrek@ucsd.edu, or feel free to submit issues or pull requests for suggested changes.
+
 # HipSTR
 **H**aplotype **i**nference and **p**hasing for **S**hort **T**andem **R**epeats  
 ![HipSTR icon!](https://raw.githubusercontent.com/tfwillems/HipSTR/master/img/HipSTR_icon_small.png)	
