@@ -129,6 +129,8 @@ void print_usage(int def_mdist, int def_min_reads, int def_max_reads, int def_ma
 	    << "\t" << "--bam-libs      <list_of_libraries>   "  << "\t" << "Comma separated list of libraries in same order as BAM/CRAM files. "                 << "\n"
 	    << "\t" << "                                      "  << "\t" << "  Assign each read the library corresponding to its file. By default, "              << "\n"
 	    << "\t" << "                                      "  << "\t" << "  each read must have an RG tag and the library is determined from the LB field"     << "\n"
+      << "\t" << "--lib-field      <field>              "  << "\t" << "Read group field used to assign each read a library. By default, "                   << "\n"
+      << "\t" << "                                      "  << "\t" << "  each read must have an RG tag and the library is determined from the LB field"     << "\n" << "\n"     << "\n"
 	    << "\t" << "--lib-from-samp                       "  << "\t" << " Assign each read the library corresponding to its sample name. By default,  "       << "\n"
 	    << "\t" << "                                      "  << "\t" << "  each read must have an RG tag and the library is determined from the LB field"     << "\n" << "\n"
 
@@ -199,6 +201,7 @@ void parse_command_line_args(int argc, char** argv,
     {"max-hap-flanks",  required_argument, 0, 'G'},
     {"max-haps",        required_argument, 0, 'J'},
     {"bam-libs",        required_argument, 0, 'q'},
+    {"lib-field",       required_argument, 0, 'L'},
     {"min-reads",       required_argument, 0, 'i'},
     {"min-flank-freq",  required_argument, 0, 'I'},
     {"read-qual-trim",  required_argument, 0, 'j'},
