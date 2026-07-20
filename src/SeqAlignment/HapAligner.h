@@ -9,6 +9,7 @@
 #include "AlignmentTraceback.h"
 #include "../base_quality.h"
 #include "Haplotype.h"
+#include "StutterAlignerClass.h"
 
 class HapAligner {
  private:
@@ -34,6 +35,9 @@ class HapAligner {
   std::vector<int> l_best_artifact_pos_buf_;
   std::vector<int> r_best_artifact_size_buf_;
   std::vector<int> r_best_artifact_pos_buf_;
+
+  std::vector<double> block_probs_buf_;
+  StutterWorkspace ws;
 
   /**
    * Align the sequence contained in SEQ_0 -> SEQ_N using the recursion
@@ -68,13 +72,15 @@ class HapAligner {
   HapAligner(const HapAligner& other);
   HapAligner& operator=(const HapAligner& other);
 
+ 
+
  public:
   HapAligner(Haplotype* haplotype, std::vector<bool>& realign_to_haplotype){
     assert(realign_to_haplotype.size() == haplotype->num_combs());
     fw_haplotype_   = haplotype;
     rev_haplotype_  = haplotype->reverse(rev_blocks_);
     realign_to_hap_ = realign_to_haplotype;
-    std::vector<double> block_probs_buf_;
+
 
     for (int i = 0; i < fw_haplotype_->num_blocks(); i++){
       HapBlock* block = fw_haplotype_->get_block(i);
