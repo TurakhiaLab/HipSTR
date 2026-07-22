@@ -37,6 +37,8 @@ class HapAligner {
   std::vector<int> r_best_artifact_pos_buf_;
 
   std::vector<double> block_probs_buf_;
+  std::vector<double> artifact_log_prior_buf_;
+  std::vector<double> aln_log_probs_buf_;
   StutterWorkspace ws;
 
   /**

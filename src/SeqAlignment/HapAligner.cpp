@@ -72,6 +72,11 @@ void HapAligner::align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
       stutter_aligner->load_read(seq_len, seq_0+seq_len-1, base_log_wrong+seq_len-1, base_log_correct+seq_len-1, ws);
 
       block_probs_buf_.resize(num_stutter_artifacts); // Reuse in each iteration to avoid reallocation penalty
+      artifact_log_prior_buf_.resize(num_stutter_artifacts);
+      int prior_idx = 0;
+      for (int artifact_size = rep_info->max_deletion(); artifact_size <= rep_info->max_insertion(); artifact_size += period)
+	artifact_log_prior_buf_[prior_idx++] = rep_info->log_prob_pcr_artifact(block_option, artifact_size);
+
       int offset = seq_len-1;
       for (int j = 0; j < seq_len; ++j, ++matrix_index, --offset){
 	// Consider valid range of insertions and deletions, including no stutter artifact
@@ -84,7 +89,7 @@ void HapAligner::align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
 	  if (base_len >= 0){
 	    double prob          = stutter_aligner->align_stutter_region_reverse(base_len, seq_0+j, offset, base_log_wrong+j, base_log_correct+j, artifact_size, art_pos, ws);
 	    double pre_prob      = (j-base_len < 0 ? 0 : match_matrix[j-base_len + prev_row_index]);
-	    block_probs_buf_[art_idx] = rep_info->log_prob_pcr_artifact(block_option, artifact_size) + prob + pre_prob;
+	    block_probs_buf_[art_idx] = artifact_log_prior_buf_[art_idx] + prob + pre_prob;
 	  }
 	  else
 	    block_probs_buf_[art_idx] = IMPOSSIBLE;
@@ -96,7 +101,8 @@ void HapAligner::align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
 	  art_idx++;
 	}
 
-	match_matrix[matrix_index]    = fast_log_sum_exp(block_probs_buf_);
+	match_matrix[matrix_index]    = fast_log_sum_exp(block_probs_buf_.data(),
+							 block_probs_buf_.data() + num_stutter_artifacts);
 	insert_matrix[matrix_index]   = IMPOSSIBLE;
 	deletion_matrix[matrix_index] = IMPOSSIBLE;
       }
@@ -181,8 +187,10 @@ double HapAligner::compute_aln_logprob(int base_seq_len, int seed_base,
   double SEED_LOG_MATCH_PRIOR = -int_log(num_seeds);
   
   double max_LL;
-  std::vector<double> log_probs;
-  log_probs.reserve(num_seeds);
+  std::vector<double>& log_probs = aln_log_probs_buf_;
+  log_probs.clear();
+  if (log_probs.capacity() < static_cast<size_t>(num_seeds))
+    log_probs.reserve(num_seeds);
   // Left flank entirely outside of haplotype window, seed aligned with 0   
   log_probs.push_back(SEED_LOG_MATCH_PRIOR + (seed_char == fw_haplotype_->get_first_char() ? log_seed_correct: log_seed_wrong)
 		      + l_prob + r_match_matrix[rflank_len*(hapsize-1)-1]);
@@ -230,7 +238,7 @@ double HapAligner::compute_aln_logprob(int base_seq_len, int seed_base,
       }
     }
   }
-  double total_LL = fast_log_sum_exp(log_probs);
+  double total_LL = fast_log_sum_exp(log_probs.data(), log_probs.data() + log_probs.size());
   assert(total_LL < TOLERANCE);
   return total_LL;
 }

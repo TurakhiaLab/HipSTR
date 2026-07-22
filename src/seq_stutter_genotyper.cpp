@@ -1004,6 +1004,19 @@ void SeqStutterGenotyper::write_vcf_record(const std::vector<std::string>& sampl
         vcf_writer->add_vcf_record(record.chrom, record.pos, record.text);
 }
 
+void SeqStutterGenotyper::write_vcf_record(const std::vector<std::string>& sample_names,
+					   const std::string& chrom_seq,
+					   bool output_viz, bool viz_left_alns,
+					   std::ostream& html_output, VCFWriter* vcf_writer,
+					   std::ostream& logger) {
+  std::vector<BuiltVCFRecord> records;
+  build_vcf_records(sample_names, chrom_seq, records, logger,
+		    output_viz, viz_left_alns, &html_output);
+  for (size_t i = 0; i < records.size(); i++)
+    if (records[i].valid)
+      vcf_writer->add_vcf_record(records[i].chrom, records[i].pos, records[i].text);
+}
+
 void SeqStutterGenotyper::build_vcf_record(const std::vector<std::string>& sample_names, int hap_block_index, const Region& region, const std::string& chrom_seq,
 					   BuiltVCFRecord& record, std::ostream& logger,
 					   bool output_viz, bool viz_left_alns, std::ostream* html_output){

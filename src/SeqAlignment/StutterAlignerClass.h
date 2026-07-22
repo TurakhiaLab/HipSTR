@@ -6,6 +6,25 @@
 
 #include "RepeatStutterInfo.h"
 
+class StutterAlignerClass;
+
+struct StutterWorkspace {
+  std::vector<double> ins_probs, del_probs, match_probs, log_probs;
+
+  const StutterAlignerClass* loaded_aligner;
+  int loaded_base_seq_len;
+  const char* loaded_base_seq;
+  const double* loaded_base_log_wrong;
+  const double* loaded_base_log_correct;
+
+  StutterWorkspace()
+    : loaded_aligner(NULL),
+      loaded_base_seq_len(-1),
+      loaded_base_seq(NULL),
+      loaded_base_log_wrong(NULL),
+      loaded_base_log_correct(NULL) {}
+};
+
 class StutterAlignerClass {
  private:
   char* block_seq_;
@@ -43,10 +62,6 @@ class StutterAlignerClass {
   StutterAlignerClass& operator=(const StutterAlignerClass& other);
   
  public:
-
- struct StutterWorkspace {
-    std::vector<double> ins_probs, del_probs, match_probs, log_probs;
-  };
 
  StutterAlignerClass(const std::string& block_seq, int period, bool left_align, const RepeatStutterInfo* stutter_info)
    : block_len_(block_seq.size()), period_(period), left_align_(left_align){

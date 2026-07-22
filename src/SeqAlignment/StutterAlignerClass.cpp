@@ -11,6 +11,13 @@
 
 void StutterAlignerClass::load_read(const int base_seq_len,       const char* base_seq,
 				    const double* base_log_wrong, const double* base_log_correct, StutterWorkspace& ws) const {
+  if (ws.loaded_aligner == this &&
+      ws.loaded_base_seq_len == base_seq_len &&
+      ws.loaded_base_seq == base_seq &&
+      ws.loaded_base_log_wrong == base_log_wrong &&
+      ws.loaded_base_log_correct == base_log_correct)
+    return;
+
   ws.ins_probs.resize(base_seq_len * num_insertions_);
   ws.match_probs.resize(base_seq_len);
   ws.del_probs.resize(base_seq_len * num_deletions_);
@@ -44,6 +51,12 @@ void StutterAlignerClass::load_read(const int base_seq_len,       const char* ba
       if ((j+1) % period_ == 0)
 	ws.ins_probs[ins_index++] = log_ins_prob;
   }
+
+  ws.loaded_aligner = this;
+  ws.loaded_base_seq_len = base_seq_len;
+  ws.loaded_base_seq = base_seq;
+  ws.loaded_base_log_wrong = base_log_wrong;
+  ws.loaded_base_log_correct = base_log_correct;
 }
 
 double StutterAlignerClass::align_no_artifact_reverse(const int offset, StutterWorkspace& ws) const {
@@ -95,7 +108,7 @@ double StutterAlignerClass::align_pcr_insertion_reverse(const int base_seq_len, 
     ws.log_probs.push_back(int_log(block_len_+i)+log_prob);
 
   // Convert to raw probabilities, add, take the log while avoiding underflow
-  return fast_log_sum_exp(ws.log_probs);
+  return fast_log_sum_exp(ws.log_probs.data(), ws.log_probs.data() + ws.log_probs.size());
 }
 
 double StutterAlignerClass::align_pcr_deletion_reverse(const int base_seq_len,       const char*   base_seq, const int offset,
@@ -142,7 +155,7 @@ double StutterAlignerClass::align_pcr_deletion_reverse(const int base_seq_len,  
     ws.log_probs.push_back(int_log(block_len_+D+i)+log_prob);
 
   // Convert to raw probabilities, add, take the log while avoiding underflow
-  return fast_log_sum_exp(ws.log_probs);
+  return fast_log_sum_exp(ws.log_probs.data(), ws.log_probs.data() + ws.log_probs.size());
 }
 
 double StutterAlignerClass::align_stutter_region_reverse(const int base_seq_len,       const char*   base_seq, const int offset,

@@ -36,6 +36,7 @@ double finish_streaming_log_sum_exp(double max_val, double total);
 const double LOG_THRESH = log(0.001);
 
 double fast_log_sum_exp(double log_v1, double log_v2);
+double fast_log_sum_exp(const double* begin, const double* end);
 double fast_log_sum_exp(const std::vector<double>& log_vals);
 
 #endif
