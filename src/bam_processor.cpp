@@ -847,14 +847,14 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
     }}
   );
 
-  auto observer = executor.make_observer<tf::TFProfObserver>();
+  //auto observer = executor.make_observer<tf::TFProfObserver>();
   taskflow.composed_of(pipeline);
   auto wall_start = std::chrono::high_resolution_clock::now();
   executor.run(taskflow).wait();
   flush_ready_results();
   auto wall_end = std::chrono::high_resolution_clock::now();
-  std::ofstream ofs("hipstr_parallel_profile.tfp", std::ios::binary);
-  observer->dump(ofs);
+  //std::ofstream ofs("hipstr_parallel_profile.tfp", std::ios::binary);
+  //observer->dump(ofs);
 
   full_logger() << "HipSTRParallel total wall time: "
                 << std::chrono::duration<double>(wall_end - wall_start).count()
