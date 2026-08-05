@@ -707,13 +707,34 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   };
 
   
-  // Split requested parallelism between region-level work and the hot read
-  // alignment loops. Keeping the number of simultaneous loci bounded avoids
-  // creating one large haplotype/DP working set per requested thread.
+  // Preserve the original high-occupancy region pipeline at modest thread
+  // counts. Two-level parallelism is useful only once many simultaneous loci
+  // start fighting over cache/TLB capacity, so enable it conservatively and
+  // leave runtime overrides for machine-specific tuning.
   size_t requested_threads = std::max<size_t>(1, NUM_THREADS);
-  size_t worker_threads = requested_threads < 4 ? requested_threads :
-    std::min<size_t>(16, std::max<size_t>(1, requested_threads/4));
-  READ_THREADS = std::max<int>(1, (NUM_THREADS + (int)worker_threads - 1)/(int)worker_threads);
+  size_t worker_threads = requested_threads;
+  READ_THREADS = 1;
+  if (requested_threads > 32){
+    worker_threads = std::min<size_t>(16, std::max<size_t>(1, requested_threads/4));
+    READ_THREADS = std::max<int>(1, (NUM_THREADS + (int)worker_threads - 1)/(int)worker_threads);
+  }
+
+  const char* region_threads_env = getenv("HIPSTR_REGION_THREADS");
+  if (region_threads_env != NULL){
+    int region_threads = atoi(region_threads_env);
+    if (region_threads > 0)
+      worker_threads = std::min<size_t>(requested_threads, (size_t)region_threads);
+  }
+
+  const char* read_threads_env = getenv("HIPSTR_READ_THREADS");
+  if (read_threads_env != NULL){
+    int read_threads = atoi(read_threads_env);
+    if (read_threads > 0)
+      READ_THREADS = read_threads;
+  }
+  else if (region_threads_env != NULL){
+    READ_THREADS = std::max<int>(1, (NUM_THREADS + (int)worker_threads - 1)/(int)worker_threads);
+  }
 
   // Keep two in-flight pipeline lines per region worker.
   size_t pipeline_lines = 2*worker_threads;
