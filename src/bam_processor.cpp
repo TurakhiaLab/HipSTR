@@ -707,9 +707,15 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   };
 
   
-  // Keep two in-flight pipeline lines per worker, while --threads controls
-  // the actual executor worker count.
-  size_t worker_threads = std::max<size_t>(1, NUM_THREADS);
+  // Split requested parallelism between region-level work and the hot read
+  // alignment loops. Keeping the number of simultaneous loci bounded avoids
+  // creating one large haplotype/DP working set per requested thread.
+  size_t requested_threads = std::max<size_t>(1, NUM_THREADS);
+  size_t worker_threads = requested_threads < 4 ? requested_threads :
+    std::min<size_t>(16, std::max<size_t>(1, requested_threads/4));
+  READ_THREADS = std::max<int>(1, (NUM_THREADS + (int)worker_threads - 1)/(int)worker_threads);
+
+  // Keep two in-flight pipeline lines per region worker.
   size_t pipeline_lines = 2*worker_threads;
   tf::Executor executor(worker_threads);
   tf::Taskflow taskflow;

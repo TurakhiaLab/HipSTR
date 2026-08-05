@@ -335,6 +335,7 @@ void SeqStutterGenotyper::add_and_remove_alleles(std::vector< std::vector<int> >
   haplotype_->reset();
   std::map<std::string, int> hap_indices;
   std::vector<std::string> hap_seqs;
+  hap_seqs.reserve(num_alleles_);
   do {
     hap_seqs.push_back(haplotype_->get_seq());
     hap_indices[hap_seqs.back()] = hap_seqs.size()-1;
@@ -360,6 +361,8 @@ void SeqStutterGenotyper::add_and_remove_alleles(std::vector< std::vector<int> >
   std::vector<std::string> updated_hap_seqs;
   std::vector<int> allele_mapping(num_alleles_, -1);
   std::vector<bool> realign_to_haplotype;
+  updated_hap_seqs.reserve(updated_haplotype->num_combs());
+  realign_to_haplotype.reserve(updated_haplotype->num_combs());
   do {
     updated_hap_seqs.push_back(updated_haplotype->get_seq());
     auto match = hap_indices.find(updated_hap_seqs.back());
@@ -376,7 +379,10 @@ void SeqStutterGenotyper::add_and_remove_alleles(std::vector< std::vector<int> >
   // Copy over the alignment probabilities for old sequences present in the new haplotype
   int new_num_alleles         = updated_haplotype->num_combs();
   double* fixed_log_aln_probs = new double[num_reads_*new_num_alleles];
-  std::fill_n(fixed_log_aln_probs, num_reads_*new_num_alleles, -100000);
+  bool copy_all_reads = std::all_of(copy_read.begin(), copy_read.end(), [](bool value){ return value; });
+  bool realign_all_pools = std::all_of(realign_pool.begin(), realign_pool.end(), [](bool value){ return value; });
+  if (!copy_all_reads || !realign_all_pools)
+    std::fill_n(fixed_log_aln_probs, num_reads_*new_num_alleles, -100000);
   double* old_log_aln_ptr     = log_aln_probs_;
   double* new_log_aln_ptr     = fixed_log_aln_probs;
   for (unsigned int i = 0; i < num_reads_; ++i){
@@ -524,14 +530,34 @@ void SeqStutterGenotyper::calc_hap_aln_probs(std::vector<bool>& realign_to_haplo
 void SeqStutterGenotyper::calc_hap_aln_probs(std::vector<bool>& realign_to_haplotype, std::vector<bool>& realign_pool, std::vector<bool>& copy_read){
   double locus_hap_aln_time = clock();
   assert(haplotype_->num_combs() == realign_to_haplotype.size() && haplotype_->num_combs() == num_alleles_);
-  HapAligner hap_aligner(haplotype_, realign_to_haplotype);
 
   // Align each pooled read to each haplotype
-  /**change the hap_aligner.process_reads() call here to be parallel */
   AlnList& pooled_alns       = pooler_.get_alignments();
   double* log_pool_aln_probs = new double[pooled_alns.size()*num_alleles_];
   int* pool_seed_positions   = new int[pooled_alns.size()];
-  hap_aligner.process_reads(pooled_alns, 0, &base_quality_, realign_pool, log_pool_aln_probs, pool_seed_positions);
+  int read_workers = std::min<int>(read_parallelism_, (int)pooled_alns.size());
+  if (read_workers <= 1 || pooled_alns.size() < 8){
+    HapAligner hap_aligner(haplotype_, realign_to_haplotype);
+    hap_aligner.process_reads(pooled_alns, 0, &base_quality_, realign_pool, log_pool_aln_probs, pool_seed_positions);
+  }
+  else {
+    tf::Executor executor(read_workers);
+    tf::Taskflow taskflow;
+    int chunk_size = ((int)pooled_alns.size() + read_workers - 1)/read_workers;
+    for (int worker = 0; worker < read_workers; worker++){
+      int begin = worker*chunk_size;
+      int end   = std::min<int>((int)pooled_alns.size(), begin + chunk_size);
+      if (begin >= end)
+        continue;
+      taskflow.emplace([&, begin, end](){
+        Haplotype local_haplotype(hap_blocks_);
+        HapAligner hap_aligner(&local_haplotype, realign_to_haplotype);
+        hap_aligner.process_reads_range(pooled_alns, begin, end, 0, &base_quality_, realign_pool,
+					log_pool_aln_probs, pool_seed_positions);
+      });
+    }
+    executor.run(taskflow).wait();
+  }
 
   // Copy each pool's alignment probabilities to the entries for its constituent reads, but only for realigned haplotypes
   double* log_aln_ptr = log_aln_probs_;

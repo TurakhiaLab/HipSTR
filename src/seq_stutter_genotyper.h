@@ -38,6 +38,7 @@ class SeqStutterGenotyper : public Genotyper {
   std::vector<int> hap_to_rflank_;
   bool output_lflanks_;
   bool output_rflanks_;
+  int read_parallelism_;
 
   typedef std::vector<Alignment> AlnList;
   AlnList alns_;                                  // Vector of left-aligned alignments
@@ -149,7 +150,8 @@ class SeqStutterGenotyper : public Genotyper {
   SeqStutterGenotyper(const RegionGroup& region_group, bool haploid, bool reassemble_flanks,
 		      std::vector<Alignment>& alignments, std::vector< std::vector<double> >& log_p1, std::vector< std::vector<double> >& log_p2,
 		      const std::vector<std::string>& sample_names, const std::string& chrom_seq,
-		      std::vector<StutterModel*>& stutter_models, VCF::VCFReader* ref_vcf, std::ostream& logger): Genotyper(haploid, sample_names, log_p1, log_p2){
+		      std::vector<StutterModel*>& stutter_models, VCF::VCFReader* ref_vcf, std::ostream& logger,
+		      int read_parallelism=1): Genotyper(haploid, sample_names, log_p1, log_p2){
     region_group_          = region_group.copy();
     alns_                  = alignments;
     seed_positions_        = NULL;
@@ -168,6 +170,7 @@ class SeqStutterGenotyper : public Genotyper {
     ref_vcf_               = ref_vcf;
     output_lflanks_ = false;
     output_rflanks_ = false;
+    read_parallelism_ = std::max(1, read_parallelism);
     assert(num_reads_ == alns_.size());
     init(stutter_models, chrom_seq, logger);
   }
