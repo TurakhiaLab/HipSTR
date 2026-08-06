@@ -25,7 +25,7 @@ const double MIN_SNP_LOG_PROB_CORRECT = -0.0043648054;
 
 void HapAligner::align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
 					  const char* seq_0, int seq_len, const double* base_log_wrong, const double* base_log_correct,
-					  double* match_matrix, double* insert_matrix, double* deletion_matrix,
+					  MatrixChannel match_matrix, MatrixChannel insert_matrix, MatrixChannel deletion_matrix,
 					  int* best_artifact_size, int* best_artifact_pos, double& left_prob){
   // NOTE: Input matrix structure: Row = Haplotype position, Column = Read index
 
@@ -172,8 +172,8 @@ void HapAligner::align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
 
 double HapAligner::compute_aln_logprob(int base_seq_len, int seed_base,
 				       char seed_char, double log_seed_wrong, double log_seed_correct,
-				       double* l_match_matrix, double* l_insert_matrix, double* l_deletion_matrix, double l_prob,
-				       double* r_match_matrix, double* r_insert_matrix, double* r_deletion_matrix, double r_prob,
+				       MatrixChannel l_match_matrix, MatrixChannel l_insert_matrix, MatrixChannel l_deletion_matrix, double l_prob,
+				       MatrixChannel r_match_matrix, MatrixChannel r_insert_matrix, MatrixChannel r_deletion_matrix, double r_prob,
 				       int& max_index){
   int lflank_len = seed_base;
   int rflank_len = base_seq_len-seed_base-1;
@@ -211,8 +211,8 @@ double HapAligner::compute_aln_logprob(int base_seq_len, int seed_base,
   //                       = rflank_len*(hap_size-i-2) + rflank_len-1 = rflank_len*(hap_size-i-1) -1;
 
   // Seed base aligned with each haplotype base
-  double* l_match_ptr  = l_match_matrix  + (lflank_len - 1);
-  double* r_match_ptr  = r_match_matrix  + (rflank_len*(hapsize-2) - 1);
+  MatrixChannel l_match_ptr  = l_match_matrix  + (lflank_len - 1);
+  MatrixChannel r_match_ptr  = r_match_matrix  + (rflank_len*(hapsize-2) - 1);
   int hap_index = 1;
   for (int block_index = 0; block_index < fw_haplotype_->num_blocks(); ++block_index){
     const std::string& block_seq = fw_haplotype_->get_seq(block_index);
@@ -399,7 +399,7 @@ inline int rev_pair_min_index(double v1, double v2){ return (v2 > v1+TRACE_LL_TO
 
 std::string HapAligner::retrace(Haplotype* haplotype, const char* read_seq, const double* base_log_correct,
 				int seq_len, int block_index, int base_index, int matrix_index,
-				double* match_matrix, double* insert_matrix, double* deletion_matrix, int* best_artifact_size, int* best_artifact_pos,
+				MatrixChannel match_matrix, MatrixChannel insert_matrix, MatrixChannel deletion_matrix, int* best_artifact_size, int* best_artifact_pos,
 				AlignmentTrace& trace){
   const int MATCH = 0, DEL = 1, INS = 2, NONE = -1; // Types of matrices
   int seq_index   = seq_len-1;
@@ -624,6 +624,12 @@ void HapAligner::process_read(const Alignment& aln, int seed_base, const BaseQua
       buffer.resize(size);
     return buffer.data();
   };
+  // Interleaved [match, insert, deletion] triples, one per DP matrix cell.
+  auto ensure_matrix_scratch = [](std::vector<double>& buffer, size_t size) -> double* {
+    if (buffer.size() < 3*size)
+      buffer.resize(3*size);
+    return buffer.data();
+  };
 
   // Extract probabilites related to base quality scores
   double* base_log_wrong   = ensure_double_scratch(base_log_wrong_buf_, aln.get_sequence().size()); // log10(Prob(error))
@@ -642,14 +648,12 @@ void HapAligner::process_read(const Alignment& aln, int seed_base, const BaseQua
   int num_hap_blocks        = fw_haplotype_->num_blocks();
   size_t left_len            = seed_base;
   size_t right_len           = base_seq_len-seed_base-1;
-  double* l_match_matrix    = ensure_double_scratch(l_match_matrix_buf_, left_len*max_hap_size);
-  double* l_insert_matrix   = ensure_double_scratch(l_insert_matrix_buf_, left_len*max_hap_size);
-  double* l_deletion_matrix = ensure_double_scratch(l_deletion_matrix_buf_, left_len*max_hap_size);
+  double* l_matrix_base      = ensure_matrix_scratch(l_matrix_buf_, left_len*max_hap_size);
+  MatrixChannel l_match_matrix(l_matrix_base), l_insert_matrix(l_matrix_base+1), l_deletion_matrix(l_matrix_base+2);
   int* l_best_artifact_size = ensure_int_scratch(l_best_artifact_size_buf_, left_len*num_hap_blocks);
   int* l_best_artifact_pos  = ensure_int_scratch(l_best_artifact_pos_buf_, left_len*num_hap_blocks);
-  double* r_match_matrix    = ensure_double_scratch(r_match_matrix_buf_, right_len*max_hap_size);
-  double* r_insert_matrix   = ensure_double_scratch(r_insert_matrix_buf_, right_len*max_hap_size);
-  double* r_deletion_matrix = ensure_double_scratch(r_deletion_matrix_buf_, right_len*max_hap_size);
+  double* r_matrix_base      = ensure_matrix_scratch(r_matrix_buf_, right_len*max_hap_size);
+  MatrixChannel r_match_matrix(r_matrix_base), r_insert_matrix(r_matrix_base+1), r_deletion_matrix(r_matrix_base+2);
   int* r_best_artifact_size = ensure_int_scratch(r_best_artifact_size_buf_, right_len*num_hap_blocks);
   int* r_best_artifact_pos  = ensure_int_scratch(r_best_artifact_pos_buf_, right_len*num_hap_blocks);
   double max_LL             = -100000000;

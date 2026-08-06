@@ -7,7 +7,6 @@
 #include <string>
 #include <sstream>
 #include <time.h>
-#include <taskflow/taskflow.hpp>
 
 #include "seq_stutter_genotyper.h"
 #include "bam_processor.h"
@@ -535,29 +534,8 @@ void SeqStutterGenotyper::calc_hap_aln_probs(std::vector<bool>& realign_to_haplo
   AlnList& pooled_alns       = pooler_.get_alignments();
   double* log_pool_aln_probs = new double[pooled_alns.size()*num_alleles_];
   int* pool_seed_positions   = new int[pooled_alns.size()];
-  int read_workers = std::min<int>(read_parallelism_, (int)pooled_alns.size());
-  if (read_workers <= 1 || pooled_alns.size() < 8){
-    HapAligner hap_aligner(haplotype_, realign_to_haplotype);
-    hap_aligner.process_reads(pooled_alns, 0, &base_quality_, realign_pool, log_pool_aln_probs, pool_seed_positions);
-  }
-  else {
-    tf::Executor executor(read_workers);
-    tf::Taskflow taskflow;
-    int chunk_size = ((int)pooled_alns.size() + read_workers - 1)/read_workers;
-    for (int worker = 0; worker < read_workers; worker++){
-      int begin = worker*chunk_size;
-      int end   = std::min<int>((int)pooled_alns.size(), begin + chunk_size);
-      if (begin >= end)
-        continue;
-      taskflow.emplace([&, begin, end](){
-        Haplotype local_haplotype(hap_blocks_);
-        HapAligner hap_aligner(&local_haplotype, realign_to_haplotype);
-        hap_aligner.process_reads_range(pooled_alns, begin, end, 0, &base_quality_, realign_pool,
-					log_pool_aln_probs, pool_seed_positions);
-      });
-    }
-    executor.run(taskflow).wait();
-  }
+  HapAligner hap_aligner(haplotype_, realign_to_haplotype);
+  hap_aligner.process_reads(pooled_alns, 0, &base_quality_, realign_pool, log_pool_aln_probs, pool_seed_positions);
 
   // Copy each pool's alignment probabilities to the entries for its constituent reads, but only for realigned haplotypes
   double* log_aln_ptr = log_aln_probs_;

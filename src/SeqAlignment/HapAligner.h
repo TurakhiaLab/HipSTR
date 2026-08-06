@@ -11,6 +11,30 @@
 #include "Haplotype.h"
 #include "StutterAlignerClass.h"
 
+// Strided view into one channel (match/insert/deletion) of an interleaved DP
+// matrix buffer laid out as [match0, insert0, deletion0, match1, insert1, ...].
+// The alignment recursion's neighbor lookups repeatedly need two of the three
+// channels for the same cell (e.g. match+deletion for the "north" and
+// "northwest" neighbors), so interleaving keeps those values in the same
+// cache line instead of three independently-strided arrays. Mimics enough of
+// double*'s interface (indexing, dereference, +/-) to drop into existing
+// pointer-style code unchanged.
+class MatrixChannel {
+ public:
+  MatrixChannel() : base_(nullptr) {}
+  explicit MatrixChannel(double* base) : base_(base) {}
+
+  double& operator[](long idx) const { return base_[3*idx]; }
+  double& operator*() const { return *base_; }
+  MatrixChannel operator+(long n) const { return MatrixChannel(base_ + 3*n); }
+  MatrixChannel operator-(long n) const { return MatrixChannel(base_ - 3*n); }
+  MatrixChannel& operator+=(long n) { base_ += 3*n; return *this; }
+  MatrixChannel& operator-=(long n) { base_ -= 3*n; return *this; }
+
+ private:
+  double* base_;
+};
+
 class HapAligner {
  private:
   Haplotype* fw_haplotype_;
@@ -25,12 +49,9 @@ class HapAligner {
   // without adding synchronization.
   std::vector<double> base_log_wrong_buf_;
   std::vector<double> base_log_correct_buf_;
-  std::vector<double> l_match_matrix_buf_;
-  std::vector<double> l_insert_matrix_buf_;
-  std::vector<double> l_deletion_matrix_buf_;
-  std::vector<double> r_match_matrix_buf_;
-  std::vector<double> r_insert_matrix_buf_;
-  std::vector<double> r_deletion_matrix_buf_;
+  // Interleaved [match, insert, deletion] triples, one per DP matrix cell.
+  std::vector<double> l_matrix_buf_;
+  std::vector<double> r_matrix_buf_;
   std::vector<int> l_best_artifact_size_buf_;
   std::vector<int> l_best_artifact_pos_buf_;
   std::vector<int> r_best_artifact_size_buf_;
@@ -48,7 +69,7 @@ class HapAligner {
   void align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
 			const char* seq_0, int seq_len,
 			const double* base_log_wrong, const double* base_log_correct,
-			double* match_matrix, double* insert_matrix, double* deletion_matrix,
+			MatrixChannel match_matrix, MatrixChannel insert_matrix, MatrixChannel deletion_matrix,
 			int* best_artifact_size, int* best_artifact_pos, double& left_prob);
 
   /**
@@ -57,13 +78,13 @@ class HapAligner {
    **/
   double compute_aln_logprob(int base_seq_len, int seed_base,
 			     char seed_char, double log_seed_wrong, double log_seed_correct,
-			     double* l_match_matrix, double* l_insert_matrix, double* l_deletion_matrix, double l_prob,
-			     double* r_match_matrix, double* r_insert_matrix, double* r_deletion_matrix, double r_prob,
+			     MatrixChannel l_match_matrix, MatrixChannel l_insert_matrix, MatrixChannel l_deletion_matrix, double l_prob,
+			     MatrixChannel r_match_matrix, MatrixChannel r_insert_matrix, MatrixChannel r_deletion_matrix, double r_prob,
 			     int& max_index);
 
   std::string retrace(Haplotype* haplotype, const char* read_seq, const double* base_log_correct,
-		      int seq_len, int block_index, int base_index, int matrix_index, double* l_match_matrix,
-		      double* l_insert_matrix, double* l_deletion_matrix, int* best_artifact_size, int* best_artifact_pos,
+		      int seq_len, int block_index, int base_index, int matrix_index, MatrixChannel l_match_matrix,
+		      MatrixChannel l_insert_matrix, MatrixChannel l_deletion_matrix, int* best_artifact_size, int* best_artifact_pos,
 		      AlignmentTrace& trace);
 
   void calc_best_seed_position(int32_t region_start, int32_t region_end,

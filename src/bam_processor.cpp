@@ -266,7 +266,6 @@ bool BamProcessor::read_and_filter_reads(BamCramMultiReader& reader, AdapterTrim
 
       // Apply adapter trimming
       adapter_trimmer.trim_adapters(alignment);
-      logger << adapter_trimmer.get_trimming_stats_msg() << "\n";
 
       if (alignment.CigarData().size() == 0 || alignment.Length() == 0)
 	continue;
@@ -707,36 +706,9 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   };
 
   
-  // Preserve the original high-occupancy region pipeline at modest thread
-  // counts. Two-level parallelism is useful only once many simultaneous loci
-  // start fighting over cache/TLB capacity, so enable it conservatively and
-  // leave runtime overrides for machine-specific tuning.
-  size_t requested_threads = std::max<size_t>(1, NUM_THREADS);
-  size_t worker_threads = requested_threads;
-  READ_THREADS = 1;
-  if (requested_threads > 32){
-    worker_threads = std::min<size_t>(16, std::max<size_t>(1, requested_threads/4));
-    READ_THREADS = std::max<int>(1, (NUM_THREADS + (int)worker_threads - 1)/(int)worker_threads);
-  }
-
-  const char* region_threads_env = getenv("HIPSTR_REGION_THREADS");
-  if (region_threads_env != NULL){
-    int region_threads = atoi(region_threads_env);
-    if (region_threads > 0)
-      worker_threads = std::min<size_t>(requested_threads, (size_t)region_threads);
-  }
-
-  const char* read_threads_env = getenv("HIPSTR_READ_THREADS");
-  if (read_threads_env != NULL){
-    int read_threads = atoi(read_threads_env);
-    if (read_threads > 0)
-      READ_THREADS = read_threads;
-  }
-  else if (region_threads_env != NULL){
-    READ_THREADS = std::max<int>(1, (NUM_THREADS + (int)worker_threads - 1)/(int)worker_threads);
-  }
-
-  // Keep two in-flight pipeline lines per region worker.
+  // Keep two in-flight pipeline lines per worker, while --threads controls
+  // the actual executor worker count.
+  size_t worker_threads = std::max<size_t>(1, NUM_THREADS);
   size_t pipeline_lines = 2*worker_threads;
   tf::Executor executor(worker_threads);
   tf::Taskflow taskflow;
@@ -781,8 +753,6 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
     tf::Pipe{tf::PipeType::SERIAL, [&](tf::Pipeflow& pf) {
       work_items[pf.line()].reset();
       results[pf.line()].reset();
-      contexts[pf.line()].work_item.reset();
-      contexts[pf.line()].result.reset();
 
       if (next_region >= regions.size()){
         pf.stop();
@@ -799,8 +769,6 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
         return;
       results[pf.line()].reset();
       auto& ctx = contexts[pf.line()];
-      ctx.work_item.reset();
-      ctx.result.reset();
 
       auto& item = *work_items[pf.line()];
       const Region& region = item.region_group.regions()[0];
@@ -844,24 +812,15 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
 
       item.log_text = line_log.str();
 
-
-      auto t0 = std::chrono::high_resolution_clock::now();
       process_region_item(item, *result);
       result->region_idx = item.region_idx;
       work_items[pf.line()].reset();
-      auto t1 = std::chrono::high_resolution_clock::now();
-      double ms = std::chrono::duration<double, std::milli>(t1-t0).count();
-      result->log_text += "[line " + std::to_string(pf.line()) + "] process_region_item: " + std::to_string(ms) + " ms\n";
 
       results[pf.line()] = std::move(result);
     }},
     // STAGE 2: serial collection point. The actual writes happen only when all
     // earlier regions have finished.
     tf::Pipe{tf::PipeType::SERIAL, [&](tf::Pipeflow& pf) {
-
-      auto& ctx = contexts[pf.line()];
-      ctx.work_item.reset();
-      ctx.result.reset();
       if (!results[pf.line()])
         return;
 

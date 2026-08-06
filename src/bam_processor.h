@@ -129,7 +129,6 @@ class BamProcessor {
     //TOO_MANY_READS           = false;
     bams_from_10x_           = false;
     NUM_THREADS              = 1;
-    READ_THREADS             = 1;
 	pass_writer_ = NULL;
 	filt_writer_ = NULL;
 
@@ -206,8 +205,7 @@ class BamProcessor {
  int32_t MAX_TOTAL_READS;       // Skip loci where the number of STR reads passing all filters exceeds this limit
 	 char    BASE_QUAL_TRIM;        // Trim boths ends of the read until encountering a base with quality greater than this threshold
 	 //bool    TOO_MANY_READS;        // Flag set if the current locus being processed as too many reads
-	 int     NUM_THREADS;           // Total number of worker threads requested
-	 int     READ_THREADS;          // Per-locus read-alignment workers used inside a region worker
+	 int     NUM_THREADS;           // Number of Taskflow executor worker threads
 
   // Per-region data produced by the serial fetch/filter stage and consumed by
   // the parallel genotyping stage. chrom_seq points into the shared chromosome
@@ -287,10 +285,6 @@ class BamProcessor {
 	  struct PipelineLineContext {
 		std::unique_ptr<BamCramMultiReader> reader;
 		std::unique_ptr<AdapterTrimmer> adapter_trimmer;
-		std::unique_ptr<RegionWorkItem> work_item;
-		std::unique_ptr<RegionResult> result;
-
-		
 	  };
 
 	  bool make_region_work_item(
