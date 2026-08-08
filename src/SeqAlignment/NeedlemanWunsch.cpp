@@ -98,7 +98,11 @@ namespace NeedlemanWunsch {
   // Convert character to integer representing the base's
   // index in the scoring matrix
   int base_to_int(char c){
-    c = toupper(c);
+    // ASCII-only uppercase: avoids the locale-aware toupper()'s ctype table
+    // lookup, which shows up as a real hotspot given this runs per base for
+    // every ref/read character passed through Needleman-Wunsch alignment.
+    if (c >= 'a' && c <= 'z')
+      c -= 'a' - 'A';
     switch(c){
     case 'A':
       return 0;

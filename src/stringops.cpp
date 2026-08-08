@@ -14,10 +14,15 @@ void split_by_delim(const std::string &s, char delim,
 }
 
 std::string uppercase(std::string str){
-  std::stringstream res;
-  for (size_t i = 0; i < str.size(); i++)
-    res << static_cast<char>(toupper(str[i]));
-  return res.str();
+  // DNA sequence data is always ASCII (ACGTN + IUPAC codes, upper or lower
+  // case for soft-masking), so a locale-aware toupper() through a
+  // std::stringstream is pure overhead here: both the ctype table lookup
+  // and the stream's own locale-aware char insertion are hot-path costs
+  // this simple ASCII range check avoids entirely.
+  for (char& c : str)
+    if (c >= 'a' && c <= 'z')
+      c -= 'a' - 'A';
+  return str;
 }
 
 bool string_starts_with(const std::string&s, std::string prefix){

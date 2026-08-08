@@ -128,7 +128,12 @@ void convertAlignment(BamAlignment& alignment, const std::string& ref_sequence, 
       break;
     case 'M': case '=': case 'X':
       while (cigar_index < cigar_iter->Length){
-	if (read_sequence[seq_index] == static_cast<char>(toupper(ref_sequence[ref_index]))){
+	// ASCII-only uppercase (avoids locale-aware toupper()'s ctype lookup,
+	// a measured hotspot since this runs per matched base for every read).
+	char ref_base = ref_sequence[ref_index];
+	if (ref_base >= 'a' && ref_base <= 'z')
+	  ref_base -= 'a' - 'A';
+	if (read_sequence[seq_index] == ref_base){
 	  if (prev_cigar_type == '=')
 	    prev_cigar_num++;
 	  else {
