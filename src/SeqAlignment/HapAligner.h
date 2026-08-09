@@ -17,22 +17,31 @@
 // channels for the same cell (e.g. match+deletion for the "north" and
 // "northwest" neighbors), so interleaving keeps those values in the same
 // cache line instead of three independently-strided arrays. Mimics enough of
-// double*'s interface (indexing, dereference, +/-) to drop into existing
+// float*'s interface (indexing, dereference, +/-) to drop into existing
 // pointer-style code unchanged.
+//
+// Cells are stored as float rather than double. Every read of a cell is
+// consumed by an expression that also involves a double (the AlignmentModel
+// transition constants, or an accumulator like l_prob/r_prob/total_LL), so
+// usual arithmetic conversions promote it back to double for the actual
+// add/max/log-sum-exp computation -- only the per-cell storage is narrowed,
+// once, when a newly computed value is written back. This halves the size of
+// the two largest per-read allocations (O(read_len x haplotype_len) each)
+// without changing the precision of any reduction.
 class MatrixChannel {
  public:
   MatrixChannel() : base_(nullptr) {}
-  explicit MatrixChannel(double* base) : base_(base) {}
+  explicit MatrixChannel(float* base) : base_(base) {}
 
-  double& operator[](long idx) const { return base_[3*idx]; }
-  double& operator*() const { return *base_; }
+  float& operator[](long idx) const { return base_[3*idx]; }
+  float& operator*() const { return *base_; }
   MatrixChannel operator+(long n) const { return MatrixChannel(base_ + 3*n); }
   MatrixChannel operator-(long n) const { return MatrixChannel(base_ - 3*n); }
   MatrixChannel& operator+=(long n) { base_ += 3*n; return *this; }
   MatrixChannel& operator-=(long n) { base_ -= 3*n; return *this; }
 
  private:
-  double* base_;
+  float* base_;
 };
 
 class HapAligner {
@@ -50,8 +59,10 @@ class HapAligner {
   std::vector<double> base_log_wrong_buf_;
   std::vector<double> base_log_correct_buf_;
   // Interleaved [match, insert, deletion] triples, one per DP matrix cell.
-  std::vector<double> l_matrix_buf_;
-  std::vector<double> r_matrix_buf_;
+  // float storage -- see MatrixChannel comment for why this doesn't affect
+  // reduction precision.
+  std::vector<float> l_matrix_buf_;
+  std::vector<float> r_matrix_buf_;
   std::vector<int> l_best_artifact_size_buf_;
   std::vector<int> l_best_artifact_pos_buf_;
   std::vector<int> r_best_artifact_size_buf_;

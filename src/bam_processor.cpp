@@ -709,7 +709,7 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   // Keep two in-flight pipeline lines per worker, while --threads controls
   // the actual executor worker count.
   size_t worker_threads = std::max<size_t>(1, NUM_THREADS);
-  size_t pipeline_lines = 2*worker_threads;
+  size_t pipeline_lines = 4*worker_threads;
   tf::Executor executor(worker_threads);
   tf::Taskflow taskflow;
   std::vector< std::unique_ptr<RegionWorkItem> > work_items(pipeline_lines);

@@ -625,7 +625,7 @@ void HapAligner::process_read(const Alignment& aln, int seed_base, const BaseQua
     return buffer.data();
   };
   // Interleaved [match, insert, deletion] triples, one per DP matrix cell.
-  auto ensure_matrix_scratch = [](std::vector<double>& buffer, size_t size) -> double* {
+  auto ensure_matrix_scratch = [](std::vector<float>& buffer, size_t size) -> float* {
     if (buffer.size() < 3*size)
       buffer.resize(3*size);
     return buffer.data();
@@ -648,11 +648,11 @@ void HapAligner::process_read(const Alignment& aln, int seed_base, const BaseQua
   int num_hap_blocks        = fw_haplotype_->num_blocks();
   size_t left_len            = seed_base;
   size_t right_len           = base_seq_len-seed_base-1;
-  double* l_matrix_base      = ensure_matrix_scratch(l_matrix_buf_, left_len*max_hap_size);
+  float* l_matrix_base      = ensure_matrix_scratch(l_matrix_buf_, left_len*max_hap_size);
   MatrixChannel l_match_matrix(l_matrix_base), l_insert_matrix(l_matrix_base+1), l_deletion_matrix(l_matrix_base+2);
   int* l_best_artifact_size = ensure_int_scratch(l_best_artifact_size_buf_, left_len*num_hap_blocks);
   int* l_best_artifact_pos  = ensure_int_scratch(l_best_artifact_pos_buf_, left_len*num_hap_blocks);
-  double* r_matrix_base      = ensure_matrix_scratch(r_matrix_buf_, right_len*max_hap_size);
+  float* r_matrix_base      = ensure_matrix_scratch(r_matrix_buf_, right_len*max_hap_size);
   MatrixChannel r_match_matrix(r_matrix_base), r_insert_matrix(r_matrix_base+1), r_deletion_matrix(r_matrix_base+2);
   int* r_best_artifact_size = ensure_int_scratch(r_best_artifact_size_buf_, right_len*num_hap_blocks);
   int* r_best_artifact_pos  = ensure_int_scratch(r_best_artifact_pos_buf_, right_len*num_hap_blocks);
