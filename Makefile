@@ -5,6 +5,10 @@
 ##USE THESE COMMANDS FOR CLEAN AND COMPILE:
 ## make clean-all
 ## make -j4
+##
+## For a build tuned with profile-guided optimization (recommended for
+## production/deployment on the target machine):
+## make pgo
 
 ## Default compilation flags.
 ## Override with:
@@ -73,6 +77,53 @@ static-dist:
 version:
 	git describe --abbrev=7 --dirty --always --tags | awk '{print "#include \"version.h\""; print "const std::string VERSION = \""$$0"\";"}' > src/version.cpp
 
+# ====================================================================
+# PROFILE-GUIDED OPTIMIZATION (PGO)
+# ====================================================================
+# `make pgo` builds HipSTR twice: an instrumented pass trained on the
+# small bundled fixture in test/pgo/ (a ~400kb chr20 STR locus cluster
+# with matching FASTA slice and 12 subsetted BAMs), then a final pass
+# compiled against the resulting profile. This trains and rebuilds
+# locally on whatever machine runs `make pgo`, so the result is tuned
+# for that hardware rather than shipped as a prebuilt binary. The
+# profile is regenerated from the fixture on every `make pgo`, so it
+# can never go stale relative to the current source.
+#
+# -fprofile-update=atomic is required (not optional) because the
+# Taskflow worker pool updates profile counters from multiple threads
+# concurrently during the instrumented training run; without it,
+# counters can be corrupted by races between workers.
+PGO_DIR       = pgo-data
+PGO_FASTA     = test/pgo/pgo_fixture.fa
+PGO_BED       = test/pgo/pgo_fixture.bed
+PGO_BAMS      = $(wildcard test/pgo/bams/*.pgo.bam)
+PGO_SNP_VCF   = test/pgo/pgo_fixture_snps.vcf.gz
+empty         :=
+space         := $(empty) $(empty)
+comma         := ,
+PGO_BAM_LIST  := $(subst $(space),$(comma),$(PGO_BAMS))
+PGO_TRAIN_VCF = $(PGO_DIR)/train.vcf.gz
+
+.PHONY: pgo
+pgo:
+	rm -rf $(PGO_DIR)
+	mkdir -p $(PGO_DIR)
+	$(MAKE) clean
+	$(MAKE) HipSTR CXXFLAGS="$(CXXFLAGS) -fprofile-generate=$(CURDIR)/$(PGO_DIR) -fprofile-update=atomic"
+	mv HipSTR HipSTR.pgo-instrument
+	./HipSTR.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --threads 1 --min-reads 10
+	./HipSTR.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --threads 4 --min-reads 10
+	./HipSTR.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --threads $(shell nproc) --min-reads 10
+	./HipSTR.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --snp-vcf $(PGO_SNP_VCF) --threads 4 --min-reads 10
+	rm -f HipSTR.pgo-instrument
+	$(MAKE) clean
+	$(MAKE) HipSTR CXXFLAGS="$(CXXFLAGS) -fprofile-use=$(CURDIR)/$(PGO_DIR) -fprofile-correction -Wno-coverage-mismatch -Wno-missing-profile"
+	mv HipSTR HipSTR.pgo-tmp
+	$(MAKE) clean
+	mv HipSTR.pgo-tmp HipSTR
+	$(MAKE) DenovoFinder
+	@echo "[pgo] HipSTR rebuilt with profile-guided optimization ($(PGO_DIR)/)"
+
 # Clean the generated files of the main project only
 .PHONY: clean
 clean:
@@ -86,6 +137,7 @@ clean-all: clean
 	cd lib/htslib && $(MAKE) clean
 	rm -f lib/cephes/*.o $(CEPHES_LIB)
 	rm -rf $(MIMALLOC_ROOT)/build
+	rm -rf pgo-data HipSTR.pgo-instrument
 
 # Include auto-generated header dependencies when present.
 -include $(DEP)

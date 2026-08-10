@@ -25,3 +25,5 @@ src/denovos/*.o
 src/denovos/*.d
 src/denovos/*~
 *.dSYM
+pgo-data/
+HipSTR.pgo-instrument

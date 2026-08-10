@@ -73,6 +73,17 @@ If you cloned without `--recurse-submodules`, initialize Taskflow before buildin
 
 The Makefile now emits compiler dependency files with `-MMD -MP`, so header changes in `src`, `src/SeqAlignment`, and `src/denovos` trigger the required object rebuilds.
 
+### Building with profile-guided optimization
+For deployment, build with PGO instead of a plain `make`:
+
+    make pgo
+
+`make pgo` compiles an instrumented `HipSTR`, trains it against a small bundled fixture (`test/pgo/`: a real ~400kb chr20 STR locus cluster with matching FASTA and 12 subsetted sample BAMs derived from the tutorial dataset), then recompiles the final `HipSTR` using the resulting profile. Because training and both compiles happen locally, the binary is tuned for whatever machine ran `make pgo`, not a profile baked in on someone else's hardware. The profile is regenerated from the fixture every time, so it never goes stale relative to the source. In benchmarking against the full tutorial dataset, this cuts wall time by roughly 8% with identical genotype output. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags.
+
+One of the training passes also exercises the `--snp-vcf` physical-phasing path (`snp_bam_processor.cpp`, `snp_tree.cpp`, `haplotype_tracker.cpp`), using `test/pgo/pgo_fixture_snps.vcf.gz` — real phased genotypes for NA12878 at the fixture window, pulled from the 1000 Genomes Phase 3 call set (the tutorial BAMs' `SM` read-group tags identify them as the CEPH trio NA12878/NA12891/NA12892). Only NA12878 is covered: she's the one member of that trio present in 1000 Genomes — her parents were never part of that cohort, and no substitute real phased data for them was available to pull in, so it wasn't fabricated. That's still 4 of the 12 bundled BAMs (the NA12878-labeled ones), enough to meaningfully exercise the phasing path during training.
+
+`make pgo` takes noticeably longer than a normal build (two full compiles plus training runs). For everyday development, keep using plain `make`.
+
 ## Quick Start
 To run HipSTR in its most broadly applicable mode, run it on **all samples concurrently** using the syntax:
 
