@@ -60,11 +60,11 @@ class VCFWriter {
 
   bool is_open() const { return open_; }
 
-  void open(const std::string& vcf_file){
+  void open(const std::string& vcf_file, int n_threads = 0){
     if (open_)
       printErrorAndDie("Cannot reopen an open VCFWriter");
     open_ = true;
-    str_vcf_.open(vcf_file.c_str());
+    str_vcf_.open(vcf_file.c_str(), "w", n_threads);
   }
 
   void write_header(const std::string& header_text){

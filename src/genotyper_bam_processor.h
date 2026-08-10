@@ -1,6 +1,7 @@
 #ifndef GENOTYPER_BAM_PROCESSOR_H_
 #define GENOTYPER_BAM_PROCESSOR_H_
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -183,7 +184,13 @@ public:
   }
 
   void set_output_str_vcf(const std::string& vcf_file, const std::string& fasta_path, const std::string& full_command, const std::set<std::string>& samples_to_output){
-    vcf_writer_.open(vcf_file);
+    // Compression runs on the pipeline's single serial collection stage
+    // regardless of --threads, so it doesn't scale with the worker count on
+    // its own; hand it off to htslib's BGZF thread pool instead. Capped well
+    // below NUM_THREADS since this pool only needs to keep pace with one
+    // producer, not compete hard with the genotyping workers for cores.
+    int vcf_compression_threads = std::max(1, std::min(NUM_THREADS, 8));
+    vcf_writer_.open(vcf_file, vcf_compression_threads);
     
     // Assemble a list of sample names for genotype output
     samples_to_genotype_.clear();

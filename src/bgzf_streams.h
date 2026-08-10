@@ -47,14 +47,20 @@ class bgzf_streambuf : public std::streambuf {
     close();
   }
   
-  void open(const char *_filename, const char *mode){
+  // n_threads > 1 hands compression off to htslib's internal BGZF thread pool
+  // (bgzf_mt) instead of doing it inline on whichever thread calls write().
+  // Only meaningful for writing -- has no effect on read streams.
+  void open(const char *_filename, const char *mode, int n_threads = 0){
     if (_fp != NULL)
       throw std::invalid_argument("bgzf_streambuf: open: called on an open stream");
-    
+
     _fp = bgzf_open(_filename, mode);
     if (_fp == NULL)
       err(1,"bgzf_open(%s,%s) failed", _filename, mode);
     filename = _filename;
+
+    if (n_threads > 1)
+      bgzf_mt(_fp, n_threads, 128);
   }
   
   void close(){
@@ -147,15 +153,15 @@ class bgzfostream : public std::ostream {
   bgzf_streambuf buf;
  public:
   
- bgzfostream(const char* filename, const char *mode="w") : std::ostream(0) {
-    buf.open(filename, mode);
+ bgzfostream(const char* filename, const char *mode="w", int n_threads = 0) : std::ostream(0) {
+    buf.open(filename, mode, n_threads);
     rdbuf(&buf);
   }
-  
+
  bgzfostream() : std::ostream(0) {}
-  
-  void open(const char* filename, const char *mode="w") {
-    buf.open(filename, mode);
+
+  void open(const char* filename, const char *mode="w", int n_threads = 0) {
+    buf.open(filename, mode, n_threads);
     rdbuf(&buf);
   }
 
