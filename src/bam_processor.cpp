@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <time.h>
 #include <chrono>
-#include <shared_mutex>
 
 #include "bam_processor.h"
 #include "adapter_trimmer.h"
@@ -719,24 +718,23 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   size_t next_region = 0;
 
   // Load each chromosome sequence once and share the stable string storage with
-  // all pipeline lines. This replaces per-line FASTA copies of large contigs.
-  std::shared_mutex chrom_cache_mutex;
+  // all pipeline lines. Only ever called from the SERIAL stage 0 pipe below, so
+  // no locking is needed -- Taskflow guarantees that pipe runs on one line at a
+  // time. (Previously guarded by a std::shared_mutex taken from the PARALLEL
+  // stage on every region; with a chromosome-sorted region file, every worker
+  // line hit the same cache entry continuously, and the rwlock's shared atomic
+  // state bouncing across cores/NUMA nodes at 64-way concurrency dominated the
+  // profile -- more sampled time than the actual alignment work.)
   std::map<std::string, std::string> chrom_cache;
   auto get_chrom_seq = [&](const std::string& chrom) -> const std::string* {
-    {
-      std::shared_lock<std::shared_mutex> lock(chrom_cache_mutex);
-      auto iter = chrom_cache.find(chrom);
-      if (iter != chrom_cache.end())
-        return &iter->second;
-    }
+    auto iter = chrom_cache.find(chrom);
+    if (iter != chrom_cache.end())
+      return &iter->second;
 
-    std::unique_lock<std::shared_mutex> lock(chrom_cache_mutex);
     auto insert_result = chrom_cache.emplace(chrom, std::string());
-    auto iter = insert_result.first;
-    if (insert_result.second) {
-      fasta_reader.get_sequence(chrom, iter->second);
-      assert(!iter->second.empty());
-    }
+    iter = insert_result.first;
+    fasta_reader.get_sequence(chrom, iter->second);
+    assert(!iter->second.empty());
     return &iter->second;
   };
 
@@ -761,6 +759,8 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
 
       size_t my_idx = next_region++;
       work_items[pf.line()] = std::make_unique<RegionWorkItem>(my_idx, RegionGroup(regions[my_idx]));
+      // Resolved here (serial, unlocked) instead of in stage 1 -- see get_chrom_seq comment above.
+      work_items[pf.line()]->chrom_seq = get_chrom_seq(regions[my_idx].chrom());
     }},
     // STAGE 1: fetch reads, optional SNP phasing prep, and genotype the region.
     // Per-line readers/trimmers avoid shared htslib state in this parallel pipe.
@@ -789,7 +789,7 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
         return;
       }
 
-      const std::string* chrom_seq = get_chrom_seq(region.chrom());
+      const std::string* chrom_seq = item.chrom_seq;
 
       if (region.start() < 50 || region.stop()+50 >= chrom_seq->size()){
         line_log << "Skipping region within 50bp of the end of the contig\n";
