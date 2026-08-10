@@ -54,22 +54,18 @@ On Ubuntu 16+ systems, the system packages can be installed with:
     apt install make g++ zlib1g-dev libhts-dev libbz2-dev liblzma-dev cmake
 
 ## Installation
-HipSTRParallel vendors Taskflow as a submodule and builds mimalloc automatically. Clone with submodules enabled:
+Taskflow's headers and mimalloc's build-relevant source are vendored directly in this repo (the same way `lib/htslib` already is) rather than pulled in as git submodules, so a plain clone is all you need — no `--recurse-submodules`, no `git submodule update --init --recursive` to remember:
 
-    git clone --recurse-submodules https://github.com/JGalil/HipSTRParallel.git
+    git clone https://github.com/JGalil/HipSTRParallel.git
 
 To build, use Make:
 
     cd HipSTRParallel
     make
 
-The command constructs an executable file called **HipSTR** in the current directory. View detailed help with:
+The command constructs an executable file called **HipSTR** in the current directory and builds mimalloc automatically as part of that. View detailed help with:
 
     ./HipSTR --help
-
-If you cloned without `--recurse-submodules`, initialize Taskflow before building:
-
-    git submodule update --init --recursive
 
 The Makefile now emits compiler dependency files with `-MMD -MP`, so header changes in `src`, `src/SeqAlignment`, and `src/denovos` trigger the required object rebuilds.
 
@@ -112,7 +108,7 @@ HipSTRParallel is a performance fork of the original HipSTR source in `HipSTR/sr
 
 Compared to the original code:
 
-- `.gitmodules` adds the Taskflow submodule used by the region pipeline.
+- `taskflow/` vendors the Taskflow headers used by the region pipeline directly in-tree (like `lib/htslib`), so no submodule init is needed to build.
 - `Makefile` switches the build to C++20, links pthreads and mimalloc, builds mimalloc locally, and generates reliable `.d` dependency files for all source directories.
 - `hipstr_main.cpp` adds `--threads`, wires it to the processor, and keeps the command-line interface otherwise compatible with the original workflow.
 - `bam_processor.*` replaces the single-region loop with a three-stage Taskflow pipeline: serial region token creation, parallel read filtering/genotyping, and serial ordered output. It also gives each pipeline line its own BAM/CRAM reader and adapter trimmer, buffers pass/filter BAM records, and shares one cached FASTA chromosome sequence across all lines.
