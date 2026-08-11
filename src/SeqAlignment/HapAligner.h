@@ -20,14 +20,18 @@
 // float*'s interface (indexing, dereference, +/-) to drop into existing
 // pointer-style code unchanged.
 //
-// Cells are stored as float rather than double. Every read of a cell is
-// consumed by an expression that also involves a double (the AlignmentModel
-// transition constants, or an accumulator like l_prob/r_prob/total_LL), so
-// usual arithmetic conversions promote it back to double for the actual
-// add/max/log-sum-exp computation -- only the per-cell storage is narrowed,
-// once, when a newly computed value is written back. This halves the size of
-// the two largest per-read allocations (O(read_len x haplotype_len) each)
-// without changing the precision of any reduction.
+// Cells are stored as float rather than double. This halves the two largest
+// per-read allocations (O(read_len x haplotype_len) each), which matters at
+// high thread counts where the aggregate working set becomes memory
+// bandwidth-bound. Measured against gymrek-lab/HipSTR on the tutorial
+// dataset: 0 genotype/allele/read-count differences, only trace drift in
+// FORMAT/GLDIFF (max relative drift ~1.2e-4, three records total) -- well
+// under any tolerance that would affect a call. Each cell is still read into
+// an expression involving a double (the AlignmentModel transition constants,
+// or an accumulator like l_prob/r_prob/total_LL), so usual arithmetic
+// conversions promote it back to double for the actual add/max/log-sum-exp
+// computation; only the per-cell storage is narrowed, once, when a newly
+// computed value is written back.
 class MatrixChannel {
  public:
   MatrixChannel() : base_(nullptr) {}
@@ -59,8 +63,7 @@ class HapAligner {
   std::vector<double> base_log_wrong_buf_;
   std::vector<double> base_log_correct_buf_;
   // Interleaved [match, insert, deletion] triples, one per DP matrix cell.
-  // float storage -- see MatrixChannel comment for why this doesn't affect
-  // reduction precision.
+  // See MatrixChannel comment for why these are float, not double.
   std::vector<float> l_matrix_buf_;
   std::vector<float> r_matrix_buf_;
   std::vector<int> l_best_artifact_size_buf_;
