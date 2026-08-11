@@ -10,7 +10,7 @@
 [Requirements](#requirements)  
 [Installation](#installation)  
 [Quick Start](#quick-start)       
-[HipSTRParallel Changes](#hipstrparallel-changes)  
+[HipSTR-MT Changes](#HipSTR-MT-changes)  
 [Tutorial](#tutorial)  
 [In-depth Usage](#in-depth-usage)  
 [Data Requirements](#data-requirements)  
@@ -39,7 +39,7 @@ Despite their utility, STRs are particularly difficult to genotype. The repetiti
 In our opinion, all of these factors make **HipSTR** the most reliable tool for genotyping STRs from **Illumina** sequencing data.
 
 ## Requirements
-HipSTRParallel keeps the original HipSTR runtime requirements and adds a modern C++ compiler for Taskflow:
+HipSTR-MT keeps the original HipSTR runtime requirements and adds a modern C++ compiler for Taskflow:
 
 - make
 - g++ with C++20 support
@@ -56,11 +56,11 @@ On Ubuntu 16+ systems, the system packages can be installed with:
 ## Installation
 Taskflow's headers and mimalloc's build-relevant source are vendored directly in this repo (the same way `lib/htslib` already is) rather than pulled in as git submodules, so a plain clone is all you need — no `--recurse-submodules`, no `git submodule update --init --recursive` to remember:
 
-    git clone https://github.com/JGalil/HipSTRParallel.git
+    git clone https://github.com/JGalil/HipSTR-MT.git
 
 To build, use Make:
 
-    cd HipSTRParallel
+    cd HipSTR-MT
     make
 
 The command constructs an executable file called **HipSTR** in the current directory and builds mimalloc automatically as part of that. View detailed help with:
@@ -74,9 +74,9 @@ For deployment, build with PGO instead of a plain `make`:
 
     make pgo
 
-`make pgo` compiles an instrumented `HipSTR`, trains it against a small bundled fixture (`test/pgo/`: a real ~400kb chr20 STR locus cluster with matching FASTA and 12 subsetted sample BAMs derived from the tutorial dataset), then recompiles the final `HipSTR` using the resulting profile. Because training and both compiles happen locally, the binary is tuned for whatever machine ran `make pgo`, not a profile baked in on someone else's hardware. The profile is regenerated from the fixture every time, so it never goes stale relative to the source. In benchmarking against the full tutorial dataset, this cuts wall time by roughly 8% with identical genotype output. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags.
+`make pgo` compiles an instrumented `HipSTR`, trains it against a small bundled fixture (`test/pgo/`: a real ~400kb chr20 STR locus cluster with matching FASTA and 12 subsetted sample BAMs derived from the tutorial dataset), then recompiles the final `HipSTR` using the resulting profile. Because training and both compiles happen locally, the binary is tuned for whatever machine ran `make pgo`, not a profile baked in on other hardware. The profile is regenerated from the fixture every time, so it never goes stale relative to the source. In benchmarking against the full tutorial dataset, this cuts wall time by roughly 8% with identical genotype output. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags.
 
-One of the training passes also exercises the `--snp-vcf` physical-phasing path (`snp_bam_processor.cpp`, `snp_tree.cpp`, `haplotype_tracker.cpp`), using `test/pgo/pgo_fixture_snps.vcf.gz` — real phased genotypes for NA12878 at the fixture window, pulled from the 1000 Genomes Phase 3 call set (the tutorial BAMs' `SM` read-group tags identify them as the CEPH trio NA12878/NA12891/NA12892). Only NA12878 is covered: she's the one member of that trio present in 1000 Genomes — her parents were never part of that cohort, and no substitute real phased data for them was available to pull in, so it wasn't fabricated. That's still 4 of the 12 bundled BAMs (the NA12878-labeled ones), enough to meaningfully exercise the phasing path during training.
+One of the training passes also exercises the `--snp-vcf` physical-phasing path (`snp_bam_processor.cpp`, `snp_tree.cpp`, `haplotype_tracker.cpp`), using `test/pgo/pgo_fixture_snps.vcf.gz` at the fixture window, pulled from the 1000 Genomes Phase 3 call set (the tutorial BAMs' `SM` read-group tags identify them as the CEPH trio NA12878/NA12891/NA12892). Only NA12878 is covered.
 
 `make pgo` takes noticeably longer than a normal build (two full compiles plus training runs). For everyday development, keep using plain `make`.
 
@@ -95,7 +95,7 @@ To run HipSTR in its most broadly applicable mode, run it on **all samples concu
 * **regions** : a [BED](#str-bed) file containing the coordinates for each STR region of interest. Download BED files for various organisms, including humans, from [here](https://github.com/HipSTR-Tool/HipSTR-references/)
 * **fasta** : [FASTA file](https://en.wikipedia.org/wiki/FASTA_format) containing the sequence for each chromosome in the BED file. This build's coordinates must match those of the STR regions
 * **str-vcf** : The output path for the STR genotypes
-* **threads** : Number of Taskflow executor worker threads. If omitted, HipSTRParallel chooses a hardware-aware default from scheduler CPU allocations, Linux CPU affinity, or `std::thread::hardware_concurrency()`. Internally, HipSTRParallel keeps two pipeline lines in flight per worker to hide serial fetch/write latency.
+* **threads** : Number of Taskflow executor worker threads. If omitted, HipSTR-MT chooses a hardware-aware default from scheduler CPU allocations, Linux CPU affinity, or `std::thread::hardware_concurrency()`. Internally, HipSTR-MT keeps two pipeline lines in flight per worker to hide serial fetch/write latency.
 
 For each region in *str_regions.bed*, **HipSTR** will:
 
@@ -103,16 +103,16 @@ For each region in *str_regions.bed*, **HipSTR** will:
 2. Use the stutter model and haplotype-based alignment algorithm to genotype each individual
 3. Output the resulting STR genotypes to *str_calls.vcf.gz*, a [bgzipped](http://www.htslib.org/doc/tabix.html) [VCF](#str-vcf) file. This VCF will contain calls for each sample in any of the BAM/CRAM files' read groups.
 
-## HipSTRParallel Changes
-HipSTRParallel is a performance fork of [gymrek-lab/HipSTR](https://github.com/gymrek-lab/HipSTR) — that's the actual upstream this was optimized from, and the baseline every claim below is diffed against. (The separate `HipSTR/` checkout alongside this repo is an older, unrelated fork and is *not* the comparison baseline — some early work here was mistakenly checked against it before that was caught, so don't rely on it either.) The goal throughout has been to make genotyping faster without changing a single genotype call, read count, or VCF field value.
+## HipSTR-MT Changes
+HipSTR-MT is a performance fork of [gymrek-lab/HipSTR](https://github.com/gymrek-lab/HipSTR) and that baseline is the comparison for all claims below.
 
-**Correctness**: verified with a tolerant VCF comparator (treats float rounding as acceptable, hard-fails on any genotype/allele/read-count change) run against the full tutorial dataset (all 12 BAMs, whole-genome FASTA, full `regions.bed`), diffed against a from-source build of gymrek-lab/HipSTR at the default settings: **0 critical/fail findings**. The only measurable difference anywhere in the output is trace-level rounding in `GLDIFF` (max relative drift ~1.2×10⁻⁴, on 3 of 535 records) — see the `HapAligner` entry under Performance optimizations below for where that comes from.
+**Correctness**: verified with a tolerant VCF comparator (treats float rounding as acceptable, hard-fails on any genotype/allele/read-count change) run against the full tutorial dataset (all 12 BAMs, whole-genome FASTA, full `regions.bed`), diffed against a from-source build of gymrek-lab/HipSTR at the default settings: **0 critical/fail findings**. The only measurable difference anywhere in the output is trace-level rounding in `GLDIFF` (max relative drift ~1.2×10⁻⁴, on 3 of 535 records). See the `HapAligner` entry under Performance optimizations below for more information.
 
 ### Parallelization
-- `bam_processor.*` replaces the single-region loop with a three-stage Taskflow pipeline: serial region token creation, parallel read filtering/genotyping, and serial ordered output — so regions are processed out of order across worker threads but written in the original BED order. Each pipeline line gets its own `BamCramMultiReader` and `AdapterTrimmer` instance, buffers its pass/filter BAM records instead of writing them inline, and all lines share one cached FASTA chromosome sequence rather than each copying it.
+- `bam_processor.*` replaces the single-region loop with a three-stage Taskflow pipeline: serial region token creation, parallel read filtering/genotyping, and serial ordered output. Regions are processed out of order across worker threads but written in the original BED order. Each pipeline line gets its own `BamCramMultiReader` and `AdapterTrimmer` instance, buffers its pass/filter BAM records instead of writing them inline, and all lines share one cached FASTA chromosome sequence rather than each copying it.
 - `snp_bam_processor.*` moves SNP phasing preparation into the pipeline work item and adds two mutexes (`snp_stats_mutex_` for aggregate counters, `snp_phase_mutex_` for the shared reader/phasing state) so `--snp-vcf` runs are safe across worker threads.
 - `genotyper_bam_processor.*` buffers per-region VCF, log, visualization, stutter, timing, and BAM output into a `RegionResult`, merges counters, and flushes everything in BED order from the serial output stage.
-- `seq_stutter_genotyper.*` adds `build_vcf_record`/`build_vcf_records`, which render a locus's VCF line into a `BuiltVCFRecord` string instead of writing directly to a stream — this is what lets a worker thread finish a region without needing to hold the output lock.
+- `seq_stutter_genotyper.*` adds `build_vcf_record`/`build_vcf_records`, which render a locus's VCF line into a `BuiltVCFRecord` string instead of writing directly to a stream, allowing a worker thread to finish a region without needing to hold the output lock.
 - `hipstr_main.cpp` adds `--threads <num_threads>`. If omitted, `default_thread_count()` picks a hardware-aware default: scheduler CPU allocation env vars first (`SLURM_CPUS_PER_TASK`, `SLURM_CPUS_ON_NODE`, `PBS_NP`, `NSLOTS`, `OMP_NUM_THREADS`), then Linux CPU affinity (`sched_getaffinity`), then `std::thread::hardware_concurrency()`. The pipeline keeps `2 * threads` region contexts in flight.
 
 ### Thread-safety fixes this required
@@ -121,23 +121,17 @@ Two pieces of the original single-threaded code held mutable state that's safe w
 - **Cephes' `bdtr`** (binomial CDF, used by `compute_allele_bias`) keeps internal state that isn't safe to call concurrently. `seq_stutter_genotyper.cpp` now wraps that call in a `std::mutex`.
 
 ### Performance optimizations
-- **`HapAligner`** reuses per-aligner scratch buffers (base-quality arrays, DP matrices, artifact size/position buffers) across reads instead of `new[]`/`delete[]` on every one — safe because `HapAligner` instances aren't shared between threads. The two largest per-read allocations (the match/insert/deletion DP matrices, `O(read_len × haplotype_len)` each) are interleaved into one buffer (`MatrixChannel`, `[match0, insert0, deletion0, match1, ...]`) for cache locality, and **stored as `float` rather than `double`** — halving that footprint, which matters once thread count is high enough that the aggregate working set becomes memory-bandwidth bound. See `src/SeqAlignment/HapAligner.h` for the measured precision impact of that choice (empirically negligible — matches the correctness numbers above).
-- **ASCII-only uppercasing** replaces locale-aware `toupper()` in three hot per-base loops (`stringops.cpp`'s `uppercase()`, `AlignmentOps.cpp`'s CIGAR-driven base comparison, `NeedlemanWunsch.cpp`'s `base_to_int()`). DNA sequence data is always ASCII (ACGTN + IUPAC codes), so the ctype-table lookup a real `toupper()` does is pure overhead here.
-- **`mathops.cpp`** adds a pointer-pair overload of `fast_log_sum_exp` (`const double* begin, const double* end`) alongside the original `vector<double>` one, avoiding a vector copy at a couple of call sites. Same math, not a precision change.
+- **`HapAligner`** reuses per-aligner scratch buffers (base-quality arrays, DP matrices, artifact size/position buffers) across reads instead of `new[]`/`delete[]` on every one. `HapAligner` instances aren't shared between threads. The two largest per-read allocations (the match/insert/deletion DP matrices, `O(read_len × haplotype_len)` each) are interleaved into one buffer (`MatrixChannel`, `[match0, insert0, deletion0, match1, ...]`) for cache locality, and **stored as `float` rather than `double`** to reduce memory bandwidth strain at high thread counts. See `src/SeqAlignment/HapAligner.h` for the measured precision impact of that choice.
+- **ASCII-only uppercasing** replaces locale-aware `toupper()` in three hot per-base loops (`stringops.cpp`'s `uppercase()`, `AlignmentOps.cpp`'s CIGAR-driven base comparison, `NeedlemanWunsch.cpp`'s `base_to_int()`). Small overhead removal.
+- **`mathops.cpp`** adds a pointer-pair overload of `fast_log_sum_exp` (`const double* begin, const double* end`) alongside the original `vector<double>` one, avoiding a vector copy at a couple of call sites.
 - **Multithreaded BGZF compression**: `bgzf_streams.h`/`vcf_writer.h` take an `n_threads` parameter that, when >1, hands VCF compression off to htslib's internal thread pool (`bgzf_mt`) instead of doing it inline on whichever thread calls `write()`.
 - **mimalloc** is linked in by default (see Installation) to cut allocator overhead from the volume of small per-read/per-locus allocations.
 
-### A pre-existing bug fixed along the way
-`NeedlemanWunsch.cpp` had `std::vector<int> ref_base_ints; ref_base_ints.reserve(L1);` followed by writing through `ref_base_ints[i]` — `reserve()` only sets capacity, not size, so this indexed past the vector's logical end (undefined behavior, present in gymrek-lab/HipSTR itself). It happened to behave correctly on every compiler/platform tested here, which is why it never showed up as an output difference — but it's still UB. Fixed by constructing the vectors with a size (`std::vector<int> ref_base_ints(L1)`) instead of reserving capacity.
-
 ### New / restored CLI flags
 - **`--threads <num_threads>`** — see Parallelization above.
-- **`--lib-from-samp`** — assign each read's library from its sample name instead of requiring an `LB` tag on every read group. Not in gymrek-lab/HipSTR at all; genuinely new here.
-- **`--dont-use-all-reads`** — restricts genotyping to reads HipSTR considers likely informative (via a new `spans_a_region` filter, gated behind `REQUIRE_SPANNING`). Not in gymrek-lab/HipSTR at all — genuinely new here, and its `--help` line is present in the source but commented out, so it's undocumented-but-functional rather than a supported option.
+- **`--lib-from-samp`** — assign each read's library from its sample name instead of requiring an `LB` tag on every read group.
+- **`--dont-use-all-reads`** — restricts genotyping to reads that fully span the STR (gated behind `REQUIRE_SPANNING`/`spans_a_region`), trading some accuracy for roughly 2x shorter runtimes: non-spanning reads only give a lower bound on repeat length (see Data Requirements below), so skipping them cuts the read volume fed into haplotype alignment. This isn't new — it's original Thomas Willems functionality from January 2017 (`--use-all-reads` was the accuracy-favoring opt-in until that point; the commit flipping the default to "use all reads" renamed the opt-out to `--dont-use-all-reads`), inherited via this repo's git history rather than added for this fork. What *is* unusual: gymrek-lab's current fork has since dropped it entirely (no trace of `REQUIRE_SPANNING`/`spans_a_region` in their source), so HipSTR-MT is the one still carrying it, not the one that added it. Its `--help` line has been commented out since that same 2017 commit.
 - **`--output-hap-fields`** — writes extra `LFLANKS`/`RFLANKS`/`HQ`/`PHQ`/`LFGT`/`RFGT` fields about the full assembled haplotypes, not just the reported STR alleles. This flag went completely dead partway through the optimization work (the `getopt` entry was dropped while the feature code stayed), and separately the VCF header it emits had the `HQ`/`PHQ`/`LFGT`/`RFGT` `FORMAT` block duplicated in place of the `LFLANKS`/`RFLANKS` `INFO` declarations. Both are fixed; like `--dont-use-all-reads`, it's intentionally absent from `--help` (matching gymrek-lab/HipSTR) but works if invoked directly.
-
-### Not changed
-`bam_io.*` and `adapter_trimmer.*` are byte-identical to gymrek-lab/HipSTR — adapter trimming in particular runs unconditionally on every read in both, with no flag to disable it in either. If you're comparing HipSTRParallel's output against some other HipSTR build and see reads trimmed that you didn't expect, that's inherited stock behavior, not something this fork added.
 
 ## Tutorial
 To demonstrate how you can quickly apply HipSTR to whole-genome sequencing datasets, we've built a simple [tutorial](https://hipstr-tool.github.io/HipSTR-tutorial/). In less than 10 minutes, this tutorial will teach you how to genotype ~600 STRs in a deeply sequenced trio of individuals and inspect the results.
@@ -221,7 +215,7 @@ HipSTR utilizes phased SNP haplotypes to phase the resulting STR genotypes. To d
 ![Phasing schematic!](https://raw.githubusercontent.com/tfwillems/HipSTR/master/img/phasing.png)
 
 ## Speed
-HipSTRParallel has built-in region-level multithreading. Use `--threads N` to set the number of Taskflow executor workers. If `--threads` is omitted, the executable selects a default from scheduler CPU allocation variables such as `SLURM_CPUS_PER_TASK`, then Linux CPU affinity, then `std::thread::hardware_concurrency()`. The pipeline keeps `2 * N` region contexts in flight so worker threads can continue genotyping while serial stages fetch the next region or flush completed output.
+HipSTR-MT has built-in region-level multithreading. Use `--threads N` to set the number of Taskflow executor workers. If `--threads` is omitted, the executable selects a default from scheduler CPU allocation variables such as `SLURM_CPUS_PER_TASK`, then Linux CPU affinity, then `std::thread::hardware_concurrency()`. The pipeline keeps `2 * N` region contexts in flight so worker threads can continue genotyping while serial stages fetch the next region or flush completed output.
 
 The highest-value internal optimizations in this fork are:
 
@@ -229,17 +223,6 @@ The highest-value internal optimizations in this fork are:
 2. Chromosome FASTA sequences are cached once per chromosome and shared across all pipeline lines, avoiding large per-line contig copies.
 3. Haplotype-alignment DP matrices are reused inside each `HapAligner`, avoiding millions of repeated allocations in the read-alignment hot path.
 4. mimalloc is linked by default to reduce allocator overhead that remains in read and haplotype processing.
-
-On the tutorial dataset profiled in `bottleneck_results/20260528_032232`, wall time continued to improve through 16 threads but with diminishing returns:
-
-| Threads | Avg wall time | Speedup vs 6 threads | Avg RSS |
-| :------ | ------------: | -------------------: | ------: |
-| 6       | 33.72 s       | 1.00x                | 2.92 GB |
-| 8       | 28.79 s       | 1.17x                | 2.95 GB |
-| 10      | 25.41 s       | 1.33x                | 2.97 GB |
-| 12      | 23.17 s       | 1.46x                | 3.00 GB |
-| 14      | 22.06 s       | 1.53x                | 3.02 GB |
-| 16      | 21.12 s       | 1.60x                | 3.05 GB |
 
 For larger runs, start with `--threads` near the number of physical cores available to the job and benchmark a small representative region set. If the run is still I/O-bound or SNP-phasing-bound, splitting by chromosome with `--chrom` remains useful for distributing work across multiple jobs.
 
@@ -263,7 +246,7 @@ HipSTR sometimes automatically filters genotypes on a per-sample basis and will 
 
 
 ## Call Filtering
-Although **HipSTR** mitigates many of the most common sources of STR genotyping errors, it's still extremely important to filter the resulting VCFs to discard low quality calls. To facilitate this process, the VCF output contains various FORMAT and INFO fields that are usually indicators of problematic calls. The INFO fields indicate the aggregate data for a locus and, if certain flags are raised, may suggest that the entire locus should be discarded. In contrast, FORMAT fields are available on a per-sample basis for each locus and, if certain flags are raised, suggest that some samples' genotypes should be discarded. The list below includes some of these fields and how they can be informative:
+Although **HipSTR** mitigates many of the most common sources of STR genotyping errors, it's still extremely important to filter the resulting VCFs to discard low quality calls. To facilitate this process, the VCF output contains various FORMAT and INFO fields that are usually indicators of problematic calls. The INFO fields indicate the aggregate data for a locus and, if certain flags are raised, may suggest that the entire locus should be discarded. In contrast, FORMAT fields are available on a per-sample basis for each locus and, if certain flags are raised, suggest that some samples' genotypes should be discarded. The list below includes some of these fields and how they can be informative. The [dumpSTR](https://trtools.readthedocs.io/en/stable/source/dumpSTR.html) utility in the [TRTools package](https://trtools.readthedocs.io/en/stable/) — actively maintained by the Gymrek lab, with utilities for filtering, merging, and computing statistics on VCFs from HipSTR and other STR genotypers — can also be used to filter VCFs using most of the fields below, and is the currently recommended approach upstream.
 
 #### INFO fields:  
 1. **DP**: Reports the total depth/number of informative reads for all samples at the locus. The mean coverage per-sample can obtained by dividing this value by the number of samples with non-missing genotypes. In general, genotypes with a low mean coverage are unreliable because the reads may only have captured one of the two alleles if an individual is heterozygous.
@@ -275,7 +258,7 @@ Although **HipSTR** mitigates many of the most common sources of STR genotyping 
 2. **DP**, **DSTUTTER** and **DFLANKINDEL**: Identical to the INFO field case, these fields are also available for each sample and can be used in the same way to identify problematic individual calls.  
 3. **AB** and **FS**: Quantify the log10 p-value of the allele bias and the Fisher strand bias, respectively. Large negative values indicate that the degree of bias observed is very unlikely to occur by random chance. In the case of **AB**, this indicates that the number of reads observed per allele is unlikely given the predicted genotype. In the case of **FS**, this indicates that there is a non-random association between sequencing strand and the allele each read is assigned to, suggesting that sequencing errors may be causing one of the reported alleles. Note that these fields are only applicable to diploid genotypes.   
 
-**So what thresholds do we suggest for each of these fields?** The answer really depends on the quality of the sequencing data, the ploidy of the chromosome and the downstream applications. However, we typically apply the following filters usings scripts we've provided in the **scripts** subdirectory of the HipSTR folder:
+**So what thresholds do we suggest for each of these fields?** The answer really depends on the quality of the sequencing data, the ploidy of the chromosome and the downstream applications. As a starting point, dumpSTR options like `--hipstr-min-call-Q 0.9 --hipstr-max-call-flank-indel 0.15 --hipstr-max-call-stutter 0.15` are a reasonable default. Alternatively, this repo still bundles the original filtering scripts in the **scripts** subdirectory, which apply the same kind of thresholds directly without a TRTools dependency:
 
 ```
 python scripts/filter_vcf.py  --vcf                   diploid_calls.vcf.gz
@@ -304,7 +287,7 @@ python scripts/filter_haploid_vcf.py -h
 | :------- | :----------- 
 | **viz-out**       aln_viz.gz     | Output a file of each locus' alignments for visualization with VizAln or [VizAlnPdf](#aln-viz) <br> **Why? You want to visualize or inspect the STR genotypes**
 | **log**         log.txt               | Output the log information to the provided file (Default = Standard error)  
-| **threads** num_threads                | Number of Taskflow executor worker threads (Default = auto) <br> **Why? You want to override HipSTRParallel's hardware-aware default**
+| **threads** num_threads                | Number of Taskflow executor worker threads (Default = auto) <br> **Why? You want to override HipSTR-MT's hardware-aware default**
 | **haploid-chrs**  list_of_chroms      | Comma separated list of chromosomes to treat as haploid (Default = all diploid) <br> **Why? You're analyzing a haploid chromosome like chrY**  
 | **no-rmdup**                            | Don't remove PCR duplicates. By default, they'll be removed <br> **Why? Your sequencing data  is for PCR-amplified regions**  
 | **use-unpaired**                        | Use unpaired reads when genotyping (Default = False) <br> **Why? Your sequencing data only contains single-ended reads**  
@@ -457,8 +440,8 @@ DSNP      | Total number of reads with SNP information
 PSNP      | Number of reads with SNPs supporting each haploid genotype
 DSTUTTER  | Number of reads with a stutter indel in the STR region
 DFLANKINDEL | Number of reads with an indel in the regions flanking the STR
-AB        | log10 of the allele bias pvalue, where 0 is no bias and more negative values are increasingly biased. 0 for all homozygous genotypes
-FS        | log10 of the strand bias pvalue from Fisher's exact test, where 0 is no bias and more negative values are increasingly biased. 0 for all homozygous genotypes
+AB        | log10 of the allele bias pvalue, where 0 is no bias and more negative values are increasingly biased. For homozygous genotypes, this can be negative if the haplotypes are heterozygous
+FS        | log10 of the strand bias pvalue from Fisher's exact test, where 0 is no bias and more negative values are increasingly biased. For homozygous genotypes, this can be negative if the haplotypes are heterozygous
 DAB       | Number of reads used in the allele bias calculation
 ALLREADS  | Base pair difference observed in each read's Needleman-Wunsch alignment
 MALLREADS | Maximum likelihood bp diff in each read based on haplotype alignments
@@ -477,13 +460,13 @@ To model PCR stutter artifacts, we assume that there are three types of stutter 
 
 Stutter model files contain the information necessary to model each of these artifacts in a **tab-delimited BED-like** format with exactly 9 columns. An example of such a file is as follows:
 
-CHROM  | START       | END      | IGEOM | IDOWN | IUP   | OGEOM | ODOWN | OUP
------  | ----------- | -------- | ----  | ----  | ---   | ----  | ---   | ---
-chr1   | 13784267    | 13784306 | 0.95  | 0.05  | 0.01  | 0.9   | 0.01  | 0.001
-chr1   | 18789523    | 18789555 | 0.8   | 0.01  | 0.05  | 0.9   | 0.001 | 0.001
-chr2   | 32079410    | 32079469 | 0.9   | 0.01  | 0.01  | 0.9   | 0.001 | 0.001
-chr17  | 38994441    | 38994492 | 0.9   | 0.001 | 0.001 | 0.9   | 0.001 | 0.001 
-chr17  | 55299940    | 55299992 | 0.95  | 0.01  | 0.01  | 0.9   | 0.001 | 0.001
+CHROM  | START       | END      | IGEOM | IDOWN | IUP   | OGEOM | ODOWN | OUP   | PERIOD
+-----  | ----------- | -------- | ----  | ----  | ---   | ----  | ---   | ---   | ---
+chr1   | 13784267    | 13784306 | 0.95  | 0.05  | 0.01  | 0.9   | 0.01  | 0.001 | 4
+chr1   | 18789523    | 18789555 | 0.8   | 0.01  | 0.05  | 0.9   | 0.001 | 0.001 | 3
+chr2   | 32079410    | 32079469 | 0.9   | 0.01  | 0.01  | 0.9   | 0.001 | 0.001 | 4
+chr17  | 38994441    | 38994492 | 0.9   | 0.001 | 0.001 | 0.9   | 0.001 | 0.001 | 4
+chr17  | 55299940    | 55299992 | 0.95  | 0.01  | 0.01  | 0.9   | 0.001 | 0.001 | 4
 
 **NOTE: The table header is for descriptive purposes. The stutter file should not have a header**
 
@@ -498,6 +481,7 @@ Each of the stutter parameters is defined as follows:
 | OUP      |  Probability that out-of-frame changes increase the size of the observed STR allele
 | IGEOM    | Parameter governing geometric step size distribution for in-frame changes
 | OGEOM    | Paramter  governing geometric step size distribution for out-of-frame changes
+| PERIOD   | Length of STR motif
 
 ## FAQ
 1. **Can I run HipSTR if my dataset only contains single-ended reads?**     
