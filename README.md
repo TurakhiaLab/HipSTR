@@ -56,11 +56,11 @@ On Ubuntu 16+ systems, the system packages can be installed with:
 ## Installation
 Taskflow's headers and mimalloc's build-relevant source are vendored directly in this repo (the same way `lib/htslib` already is) rather than pulled in as git submodules, so a plain clone is all you need — no `--recurse-submodules`, no `git submodule update --init --recursive` to remember:
 
-    git clone https://github.com/JGalil/HipSTR-MT.git
+    git clone https://github.com/TurakhiaLab/HipSTR
 
 To build, use Make:
 
-    cd HipSTR-MT
+    cd HipSTR
     make
 
 The command constructs an executable file called **HipSTR** in the current directory and builds mimalloc automatically as part of that. View detailed help with:
@@ -95,7 +95,7 @@ To run HipSTR in its most broadly applicable mode, run it on **all samples concu
 * **regions** : a [BED](#str-bed) file containing the coordinates for each STR region of interest. Download BED files for various organisms, including humans, from [here](https://github.com/HipSTR-Tool/HipSTR-references/)
 * **fasta** : [FASTA file](https://en.wikipedia.org/wiki/FASTA_format) containing the sequence for each chromosome in the BED file. This build's coordinates must match those of the STR regions
 * **str-vcf** : The output path for the STR genotypes
-* **threads** : Number of Taskflow executor worker threads. If omitted, HipSTR-MT chooses a hardware-aware default from scheduler CPU allocations, Linux CPU affinity, or `std::thread::hardware_concurrency()`. Internally, HipSTR-MT keeps two pipeline lines in flight per worker to hide serial fetch/write latency.
+* **threads** : Number of Taskflow executor worker threads. If omitted, HipSTR-MT chooses a hardware-aware default from scheduler CPU allocations, Linux CPU affinity, or `std::thread::hardware_concurrency()`. Internally, HipSTR-MT keeps four pipeline lines in flight per worker to hide serial fetch/write latency.
 
 For each region in *str_regions.bed*, **HipSTR** will:
 
@@ -113,7 +113,7 @@ HipSTR-MT is a performance fork of [gymrek-lab/HipSTR](https://github.com/gymrek
 - `snp_bam_processor.*` moves SNP phasing preparation into the pipeline work item and adds two mutexes (`snp_stats_mutex_` for aggregate counters, `snp_phase_mutex_` for the shared reader/phasing state) so `--snp-vcf` runs are safe across worker threads.
 - `genotyper_bam_processor.*` buffers per-region VCF, log, visualization, stutter, timing, and BAM output into a `RegionResult`, merges counters, and flushes everything in BED order from the serial output stage.
 - `seq_stutter_genotyper.*` adds `build_vcf_record`/`build_vcf_records`, which render a locus's VCF line into a `BuiltVCFRecord` string instead of writing directly to a stream, allowing a worker thread to finish a region without needing to hold the output lock.
-- `hipstr_main.cpp` adds `--threads <num_threads>`. If omitted, `default_thread_count()` picks a hardware-aware default: scheduler CPU allocation env vars first (`SLURM_CPUS_PER_TASK`, `SLURM_CPUS_ON_NODE`, `PBS_NP`, `NSLOTS`, `OMP_NUM_THREADS`), then Linux CPU affinity (`sched_getaffinity`), then `std::thread::hardware_concurrency()`. The pipeline keeps `2 * threads` region contexts in flight.
+- `hipstr_main.cpp` adds `--threads <num_threads>`. If omitted, `default_thread_count()` picks a hardware-aware default: scheduler CPU allocation env vars first (`SLURM_CPUS_PER_TASK`, `SLURM_CPUS_ON_NODE`, `PBS_NP`, `NSLOTS`, `OMP_NUM_THREADS`), then Linux CPU affinity (`sched_getaffinity`), then `std::thread::hardware_concurrency()`. The pipeline keeps `4 * threads` region contexts in flight.
 
 ### Thread-safety fixes this required
 Two pieces of the original single-threaded code held mutable state that's safe when there's exactly one caller but isn't once worker threads share it:
@@ -130,7 +130,6 @@ Two pieces of the original single-threaded code held mutable state that's safe w
 ### New / restored CLI flags
 - **`--threads <num_threads>`** — see Parallelization above.
 - **`--lib-from-samp`** — assign each read's library from its sample name instead of requiring an `LB` tag on every read group.
-- **`--dont-use-all-reads`** — restricts genotyping to reads that fully span the STR (gated behind `REQUIRE_SPANNING`/`spans_a_region`), trading some accuracy for roughly 2x shorter runtimes: non-spanning reads only give a lower bound on repeat length (see Data Requirements below), so skipping them cuts the read volume fed into haplotype alignment. This isn't new — it's original Thomas Willems functionality from January 2017 (`--use-all-reads` was the accuracy-favoring opt-in until that point; the commit flipping the default to "use all reads" renamed the opt-out to `--dont-use-all-reads`), inherited via this repo's git history rather than added for this fork. What *is* unusual: gymrek-lab's current fork has since dropped it entirely (no trace of `REQUIRE_SPANNING`/`spans_a_region` in their source), so HipSTR-MT is the one still carrying it, not the one that added it. Its `--help` line has been commented out since that same 2017 commit.
 - **`--output-hap-fields`** — writes extra `LFLANKS`/`RFLANKS`/`HQ`/`PHQ`/`LFGT`/`RFGT` fields about the full assembled haplotypes, not just the reported STR alleles. This flag went completely dead partway through the optimization work (the `getopt` entry was dropped while the feature code stayed), and separately the VCF header it emits had the `HQ`/`PHQ`/`LFGT`/`RFGT` `FORMAT` block duplicated in place of the `LFLANKS`/`RFLANKS` `INFO` declarations. Both are fixed; like `--dont-use-all-reads`, it's intentionally absent from `--help` (matching gymrek-lab/HipSTR) but works if invoked directly.
 
 ## Tutorial
@@ -215,7 +214,7 @@ HipSTR utilizes phased SNP haplotypes to phase the resulting STR genotypes. To d
 ![Phasing schematic!](https://raw.githubusercontent.com/tfwillems/HipSTR/master/img/phasing.png)
 
 ## Speed
-HipSTR-MT has built-in region-level multithreading. Use `--threads N` to set the number of Taskflow executor workers. If `--threads` is omitted, the executable selects a default from scheduler CPU allocation variables such as `SLURM_CPUS_PER_TASK`, then Linux CPU affinity, then `std::thread::hardware_concurrency()`. The pipeline keeps `2 * N` region contexts in flight so worker threads can continue genotyping while serial stages fetch the next region or flush completed output.
+HipSTR-MT has built-in region-level multithreading. Use `--threads N` to set the number of Taskflow executor workers. If `--threads` is omitted, the executable selects a default from scheduler CPU allocation variables such as `SLURM_CPUS_PER_TASK`, then Linux CPU affinity, then `std::thread::hardware_concurrency()`. The pipeline keeps `4 * N` region contexts in flight so worker threads can continue genotyping while serial stages fetch the next region or flush completed output.
 
 The highest-value internal optimizations in this fork are:
 

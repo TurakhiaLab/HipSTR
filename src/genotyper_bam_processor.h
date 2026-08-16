@@ -184,12 +184,11 @@ public:
   }
 
   void set_output_str_vcf(const std::string& vcf_file, const std::string& fasta_path, const std::string& full_command, const std::set<std::string>& samples_to_output){
-    // Compression runs on the pipeline's single serial collection stage
-    // regardless of --threads, so it doesn't scale with the worker count on
-    // its own; hand it off to htslib's BGZF thread pool instead. Capped well
-    // below NUM_THREADS since this pool only needs to keep pace with one
-    // producer, not compete hard with the genotyping workers for cores.
-    int vcf_compression_threads = std::max(1, std::min(NUM_THREADS, 8));
+    // htslib's BGZF thread pool (bgzf_mt) is disabled by default: pass
+    // --vcf-compression-threads N (N > 1) explicitly to opt back in.
+    int vcf_compression_threads = VCF_COMPRESSION_THREADS > 0
+      ? VCF_COMPRESSION_THREADS
+      : 1;
     vcf_writer_.open(vcf_file, vcf_compression_threads);
     
     // Assemble a list of sample names for genotype output

@@ -129,6 +129,7 @@ class BamProcessor {
     //TOO_MANY_READS           = false;
     bams_from_10x_           = false;
     NUM_THREADS              = 1;
+	VCF_COMPRESSION_THREADS  = 0;
 	pass_writer_ = NULL;
 	filt_writer_ = NULL;
 
@@ -206,6 +207,7 @@ class BamProcessor {
 	 char    BASE_QUAL_TRIM;        // Trim boths ends of the read until encountering a base with quality greater than this threshold
 	 //bool    TOO_MANY_READS;        // Flag set if the current locus being processed as too many reads
 	 int     NUM_THREADS;           // Number of Taskflow executor worker threads
+	 int     VCF_COMPRESSION_THREADS; // 0 selects the automatic BGZF compression-thread count
 
   // Per-region data produced by the serial fetch/filter stage and consumed by
   // the parallel genotyping stage. chrom_seq points into the shared chromosome
