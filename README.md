@@ -106,7 +106,7 @@ For each region in *str_regions.bed*, **HipSTR** will:
 ## HipSTR-MT Changes
 HipSTR-MT is a performance fork of [gymrek-lab/HipSTR](https://github.com/gymrek-lab/HipSTR) and that baseline is the comparison for all claims below.
 
-**Correctness**: verified with a tolerant VCF comparator (treats float rounding as acceptable, hard-fails on any genotype/allele/read-count change) run against the full tutorial dataset (all 12 BAMs, whole-genome FASTA, full `regions.bed`), diffed against a from-source build of gymrek-lab/HipSTR at the default settings: **0 critical/fail findings**. The only measurable difference anywhere in the output is trace-level rounding in `GLDIFF` (max relative drift ~1.2×10⁻⁴, on 3 of 535 records). See the `HapAligner` entry under Performance optimizations below for more information.
+**Correctness**: verified with against the outputs of the Gymrek Lab's version of HipSTR: Byte identical outputs for the tutorial dataset and the NA12978, NA12891, and NA12892 datasets.
 
 ### Parallelization
 - `bam_processor.*` replaces the single-region loop with a three-stage Taskflow pipeline: serial region token creation, parallel read filtering/genotyping, and serial ordered output. Regions are processed out of order across worker threads but written in the original BED order. Each pipeline line gets its own `BamCramMultiReader` and `AdapterTrimmer` instance, buffers its pass/filter BAM records instead of writing them inline, and all lines share one cached FASTA chromosome sequence rather than each copying it.
@@ -120,17 +120,17 @@ Two pieces of the original single-threaded code held mutable state that's safe w
 - **`StutterAlignerClass`**: its scratch buffers (`ins_probs_`, `del_probs_`, `match_probs_`, `log_probs_`) were instance members, reallocated on every `load_read()` call. These objects are owned by the haplotype/block structure and shared across threads (unlike `HapAligner`, which is per-thread), so concurrent `load_read()` calls would have raced on that shared state. Fixed by moving the buffers into a caller-supplied `StutterWorkspace` (one per `HapAligner`) — `StutterAlignerClass`'s methods are now `const` and touch no shared mutable state. This also added memoization: a repeated `load_read()` call with identical arguments (common when reusing alignments across candidate haplotypes) now skips recomputation instead of redoing it.
 - **Cephes' `bdtr`** (binomial CDF, used by `compute_allele_bias`) keeps internal state that isn't safe to call concurrently. `seq_stutter_genotyper.cpp` now wraps that call in a `std::mutex`.
 
-### Performance optimizations
-- **`HapAligner`** reuses per-aligner scratch buffers (base-quality arrays, DP matrices, artifact size/position buffers) across reads instead of `new[]`/`delete[]` on every one. `HapAligner` instances aren't shared between threads. The two largest per-read allocations (the match/insert/deletion DP matrices, `O(read_len × haplotype_len)` each) are interleaved into one buffer (`MatrixChannel`, `[match0, insert0, deletion0, match1, ...]`) for cache locality, and **stored as `float` rather than `double`** to reduce memory bandwidth strain at high thread counts. See `src/SeqAlignment/HapAligner.h` for the measured precision impact of that choice.
+### Memory optimizations
+- **`HapAligner`** reuses per-aligner scratch buffers (base-quality arrays, DP matrices, artifact size/position buffers) across reads instead of `new[]`/`delete[]` on every one. `HapAligner` instances aren't shared between threads. The two largest per-read allocations (the match/insert/deletion DP matrices, `O(read_len × haplotype_len)` each) are interleaved into one buffer (`MatrixChannel`, `[match0, insert0, deletion0, match1, ...]`) for improved cache locality.
 - **ASCII-only uppercasing** replaces locale-aware `toupper()` in three hot per-base loops (`stringops.cpp`'s `uppercase()`, `AlignmentOps.cpp`'s CIGAR-driven base comparison, `NeedlemanWunsch.cpp`'s `base_to_int()`). Small overhead removal.
 - **`mathops.cpp`** adds a pointer-pair overload of `fast_log_sum_exp` (`const double* begin, const double* end`) alongside the original `vector<double>` one, avoiding a vector copy at a couple of call sites.
-- **Multithreaded BGZF compression**: `bgzf_streams.h`/`vcf_writer.h` take an `n_threads` parameter that, when >1, hands VCF compression off to htslib's internal thread pool (`bgzf_mt`) instead of doing it inline on whichever thread calls `write()`.
 - **mimalloc** is linked in by default (see Installation) to cut allocator overhead from the volume of small per-read/per-locus allocations.
+- **chromosome cache** is used to share chromosomes across threads. Since the program uses the chromosomes in order, when a chromosome is no longer in use due to all threads migrating to the next one, it is removed from the shared cache, reducing memory footprint.
 
 ### New / restored CLI flags
 - **`--threads <num_threads>`** — see Parallelization above.
 - **`--lib-from-samp`** — assign each read's library from its sample name instead of requiring an `LB` tag on every read group.
-- **`--output-hap-fields`** — writes extra `LFLANKS`/`RFLANKS`/`HQ`/`PHQ`/`LFGT`/`RFGT` fields about the full assembled haplotypes, not just the reported STR alleles. This flag went completely dead partway through the optimization work (the `getopt` entry was dropped while the feature code stayed), and separately the VCF header it emits had the `HQ`/`PHQ`/`LFGT`/`RFGT` `FORMAT` block duplicated in place of the `LFLANKS`/`RFLANKS` `INFO` declarations. Both are fixed; like `--dont-use-all-reads`, it's intentionally absent from `--help` (matching gymrek-lab/HipSTR) but works if invoked directly.
+- **`--output-hap-fields`** — writes extra `LFLANKS`/`RFLANKS`/`HQ`/`PHQ`/`LFGT`/`RFGT` fields about the full assembled haplotypes,
 
 ## Tutorial
 To demonstrate how you can quickly apply HipSTR to whole-genome sequencing datasets, we've built a simple [tutorial](https://hipstr-tool.github.io/HipSTR-tutorial/). In less than 10 minutes, this tutorial will teach you how to genotype ~600 STRs in a deeply sequenced trio of individuals and inspect the results.

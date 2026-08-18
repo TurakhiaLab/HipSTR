@@ -29,3 +29,4 @@ pgo-data/
 HipSTR.pgo-instrument
 lib/mimalloc/build/
 lib/mimalloc/cmake_local/
+.codex

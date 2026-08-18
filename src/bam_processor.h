@@ -210,12 +210,14 @@ class BamProcessor {
 	 int     VCF_COMPRESSION_THREADS; // 0 selects the automatic BGZF compression-thread count
 
   // Per-region data produced by the serial fetch/filter stage and consumed by
-  // the parallel genotyping stage. chrom_seq points into the shared chromosome
-  // cache owned by process_regions and remains valid for the full run.
+  // the parallel genotyping stage. chrom_seq is a shared reference into the
+  // chromosome cache owned by process_regions -- shared (not raw) so a
+  // chromosome can be evicted from that cache once the fetch stage moves on
+  // while still-running lines here keep it alive until they finish with it.
   struct RegionWorkItem {
 		size_t region_idx = 0;
 		RegionGroup region_group;
-		const std::string* chrom_seq;
+		std::shared_ptr<std::string> chrom_seq;
 		std::vector<std::string> rg_names;
 	    std::vector<BamProcessor::BamAlnList> paired_strs_by_rg;
 	    std::vector<BamProcessor::BamAlnList> mate_pairs_by_rg;
@@ -232,7 +234,7 @@ class BamProcessor {
 		std::vector<BamAlignment> passing_bam_records;
 		std::vector<FilteredBamRecord> filtered_bam_records;
 
-	    RegionWorkItem(size_t idx, const RegionGroup& rg) : region_idx(idx), region_group(rg), chrom_seq(NULL), too_many_reads(false) {}
+	    RegionWorkItem(size_t idx, const RegionGroup& rg) : region_idx(idx), region_group(rg), too_many_reads(false) {}
 
 	  };
 

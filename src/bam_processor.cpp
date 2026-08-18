@@ -605,7 +605,7 @@ bool BamProcessor::make_region_work_item(BamCramMultiReader& reader,
 					 BamWriter* filt_writer,
 					 std::ostream& logger,
 					 RegionWorkItem& item) {
-  item.chrom_seq = &chrom_seq;
+  // item.chrom_seq is already set by the serial fetch stage (process_regions).
 
   auto seek_start = std::chrono::steady_clock::now();
   if (!reader.SetRegion(region.chrom(), (region.start() < MAX_MATE_DIST ? 0 : region.start()-MAX_MATE_DIST),
@@ -689,31 +689,41 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   // Add the chromosome information to the VCF
   init_output_vcf(fasta_file, chroms, full_command);
 
-  // Results may complete out of order. Hold them until every preceding region
-  // has been written so VCF, log, BAM, and auxiliary outputs match BED order.
-  std::map<size_t, std::unique_ptr<RegionResult>> pending_results;
-  size_t next_result_to_write = 0;
-
-  auto flush_ready_results = [&]() {
-    while(true) {
-      auto iter = pending_results.find(next_result_to_write);
-      if(iter == pending_results.end()) break;
-
-      write_region_result(*iter->second);
-      pending_results.erase(iter);
-      ++next_result_to_write;
-    }
-  };
-
-  
   // Keep two in-flight pipeline lines per worker, while --threads controls
   // the actual executor worker count.
   size_t worker_threads = std::max<size_t>(1, NUM_THREADS);
-  size_t pipeline_lines = 4*worker_threads;
+  // At worker_threads == 1, extra lines can't add concurrency (only one
+  // pipe stage can ever execute at a time regardless of queue depth) -- they
+  // just multiply readers/trimmers and work-item/result slots for no benefit.
+  size_t pipeline_lines = (worker_threads == 1) ? 1 : 4*worker_threads;
   tf::Executor executor(worker_threads);
   tf::Taskflow taskflow;
   std::vector< std::unique_ptr<RegionWorkItem> > work_items(pipeline_lines);
   std::vector< std::unique_ptr<RegionResult> > results(pipeline_lines);
+
+  // Results may complete out of order. Hold them until every preceding region
+  // has been written so VCF, log, BAM, and auxiliary outputs match BED order.
+  // A flat ring buffer sized to pipeline_lines (rather than a std::map keyed
+  // by region_idx) works because the pipeline construct itself guarantees at
+  // most pipeline_lines regions are ever in flight at once -- the same bound
+  // work_items/results above already rely on -- so region_idx % pipeline_lines
+  // can never collide between two simultaneously-pending results. This sits
+  // on the pipeline's only other serial stage (alongside token generation),
+  // so avoiding a red-black tree's node allocations and pointer-chasing here
+  // matters more than it would on the parallel stage.
+  std::vector<std::unique_ptr<RegionResult>> pending_results(pipeline_lines);
+  size_t next_result_to_write = 0;
+
+  auto flush_ready_results = [&]() {
+    while (true) {
+      size_t slot = next_result_to_write % pipeline_lines;
+      if (!pending_results[slot]) break;
+
+      write_region_result(*pending_results[slot]);
+      pending_results[slot].reset();
+      ++next_result_to_write;
+    }
+  };
 
   int merge_type = BamCramMultiReader::ORDER_ALNS_BY_FILE;
   size_t next_region = 0;
@@ -726,17 +736,33 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   // line hit the same cache entry continuously, and the rwlock's shared atomic
   // state bouncing across cores/NUMA nodes at 64-way concurrency dominated the
   // profile -- more sampled time than the actual alignment work.)
-  std::map<std::string, std::string> chrom_cache;
-  auto get_chrom_seq = [&](const std::string& chrom) -> const std::string* {
+  // Bounded at MAX_CACHED_CHROMS entries: with a chromosome-sorted region
+  // file, only the current chromosome (plus one grace slot for lines still
+  // finishing regions on the previous one) is ever needed. Values are
+  // shared_ptrs rather than owned strings so evicting the cache's own
+  // reference here doesn't invalidate a still-running pipeline line that
+  // holds its own copy of the shared_ptr in RegionWorkItem::chrom_seq --
+  // that line's copy keeps the underlying string alive until it finishes.
+  // Without this, chrom_cache held every chromosome ever touched for the
+  // life of the run (~3GB for a full hg19 genome scan).
+  const size_t MAX_CACHED_CHROMS = 2;
+  std::map<std::string, std::shared_ptr<std::string>> chrom_cache;
+  std::vector<std::string> chrom_cache_order; // insertion order, oldest first
+  auto get_chrom_seq = [&](const std::string& chrom) -> std::shared_ptr<std::string> {
     auto iter = chrom_cache.find(chrom);
     if (iter != chrom_cache.end())
-      return &iter->second;
+      return iter->second;
 
-    auto insert_result = chrom_cache.emplace(chrom, std::string());
-    iter = insert_result.first;
-    fasta_reader.get_sequence(chrom, iter->second);
-    assert(!iter->second.empty());
-    return &iter->second;
+    auto seq = std::make_shared<std::string>();
+    fasta_reader.get_sequence(chrom, *seq);
+    assert(!seq->empty());
+    chrom_cache[chrom] = seq;
+    chrom_cache_order.push_back(chrom);
+    while (chrom_cache_order.size() > MAX_CACHED_CHROMS) {
+      chrom_cache.erase(chrom_cache_order.front());
+      chrom_cache_order.erase(chrom_cache_order.begin());
+    }
+    return seq;
   };
 
   std::vector<PipelineLineContext> contexts(pipeline_lines);
@@ -790,7 +816,10 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
         return;
       }
 
-      const std::string* chrom_seq = item.chrom_seq;
+      // Raw pointer is safe here: item (and its chrom_seq shared_ptr) stays
+      // alive for the rest of this pipe -- work_items[pf.line()] isn't reset
+      // until after every use of chrom_seq below.
+      const std::string* chrom_seq = item.chrom_seq.get();
 
       if (region.start() < 50 || region.stop()+50 >= chrom_seq->size()){
         line_log << "Skipping region within 50bp of the end of the contig\n";
@@ -826,7 +855,7 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
         return;
 
       size_t idx = results[pf.line()]->region_idx;
-      pending_results[idx] = std::move(results[pf.line()]);
+      pending_results[idx % pipeline_lines] = std::move(results[pf.line()]);
       flush_ready_results();
       
       

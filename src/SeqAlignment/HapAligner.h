@@ -20,32 +20,30 @@
 // float*'s interface (indexing, dereference, +/-) to drop into existing
 // pointer-style code unchanged.
 //
-// Cells are stored as float rather than double. This halves the two largest
-// per-read allocations (O(read_len x haplotype_len) each), which matters at
-// high thread counts where the aggregate working set becomes memory
-// bandwidth-bound. Measured against gymrek-lab/HipSTR on the tutorial
-// dataset: 0 genotype/allele/read-count differences, only trace drift in
-// FORMAT/GLDIFF (max relative drift ~1.2e-4, three records total) -- well
-// under any tolerance that would affect a call. Each cell is still read into
-// an expression involving a double (the AlignmentModel transition constants,
-// or an accumulator like l_prob/r_prob/total_LL), so usual arithmetic
-// conversions promote it back to double for the actual add/max/log-sum-exp
-// computation; only the per-cell storage is narrowed, once, when a newly
-// computed value is written back.
+// Cells were stored as float rather than double for a memory-bandwidth win
+// at high thread counts, but reverted: at full-genome scale (vs. the
+// 599-locus tutorial dataset this was validated against), the narrowed
+// precision let near-tied paths in compute_aln_logprob and retrace flip,
+// changing reported read/allele counts at a handful of STR/homopolymer loci
+// where alignment paths are near-degenerate by construction. Confirmed
+// thread-count-independent (reproducible at --threads 1), so not a race --
+// see results/NA12891/profile/diff_original_vs_t64.tsv. A better-targeted
+// fix would narrow only stutter/repeat block columns, where the ties
+// concentrate, instead of the whole matrix.
 class MatrixChannel {
  public:
   MatrixChannel() : base_(nullptr) {}
-  explicit MatrixChannel(float* base) : base_(base) {}
+  explicit MatrixChannel(double* base) : base_(base) {}
 
-  float& operator[](long idx) const { return base_[3*idx]; }
-  float& operator*() const { return *base_; }
+  double& operator[](long idx) const { return base_[3*idx]; }
+  double& operator*() const { return *base_; }
   MatrixChannel operator+(long n) const { return MatrixChannel(base_ + 3*n); }
   MatrixChannel operator-(long n) const { return MatrixChannel(base_ - 3*n); }
   MatrixChannel& operator+=(long n) { base_ += 3*n; return *this; }
   MatrixChannel& operator-=(long n) { base_ -= 3*n; return *this; }
 
  private:
-  float* base_;
+  double* base_;
 };
 
 class HapAligner {
@@ -63,9 +61,8 @@ class HapAligner {
   std::vector<double> base_log_wrong_buf_;
   std::vector<double> base_log_correct_buf_;
   // Interleaved [match, insert, deletion] triples, one per DP matrix cell.
-  // See MatrixChannel comment for why these are float, not double.
-  std::vector<float> l_matrix_buf_;
-  std::vector<float> r_matrix_buf_;
+  std::vector<double> l_matrix_buf_;
+  std::vector<double> r_matrix_buf_;
   std::vector<int> l_best_artifact_size_buf_;
   std::vector<int> l_best_artifact_pos_buf_;
   std::vector<int> r_best_artifact_size_buf_;
