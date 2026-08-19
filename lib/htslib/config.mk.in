@@ -1,6 +1,6 @@
 #  Optional configure Makefile overrides for htslib.
 #
-#    Copyright (C) 2015-2017 Genome Research Ltd.
+#    Copyright (C) 2015-2017, 2019, 2023, 2025 Genome Research Ltd.
 #
 #    Author: John Marshall <jm18@sanger.ac.uk>
 #
@@ -43,10 +43,15 @@ RANLIB = @RANLIB@
 CPPFLAGS = @CPPFLAGS@
 CFLAGS   = @CFLAGS@
 LDFLAGS  = @LDFLAGS@
+VERSION_SCRIPT_LDFLAGS = @VERSION_SCRIPT_LDFLAGS@
 LIBS     = @LIBS@
 
 PLATFORM   = @PLATFORM@
 PLUGIN_EXT = @PLUGIN_EXT@
+
+# The default Makefile enables some of the optional files, but we blank
+# them so they can be controlled by configure instead.
+NONCONFIGURE_OBJS =
 
 # Lowercase here indicates these are "local" to config.mk
 plugin_OBJS =
@@ -77,7 +82,7 @@ plugin_OBJS += hfile_s3.o
 
 CRYPTO_LIBS = @CRYPTO_LIBS@
 noplugin_LIBS += $(CRYPTO_LIBS)
-hfile_s3$(PLUGIN_EXT): LIBS += $(CRYPTO_LIBS)
+hfile_s3$(PLUGIN_EXT): LIBS += $(CRYPTO_LIBS) $(LIBCURL_LIBS)
 endif
 
 ifeq "plugins-@enable_plugins@" "plugins-yes"
@@ -88,7 +93,7 @@ pluginpath = @pluginpath@
 LIBHTS_OBJS += plugin.o
 PLUGIN_OBJS += $(plugin_OBJS)
 
-plugin.o plugin.pico: CPPFLAGS += -DPLUGINPATH=\"$(pluginpath)\"
+plugin.o plugin.pico: ALL_CPPFLAGS += -DPLUGINPATH=\"$(pluginpath)\"
 
 # When built as separate plugins, these record their version themselves.
 hfile_gcs.o hfile_gcs.pico: version.h
@@ -105,3 +110,14 @@ LDFLAGS += $(noplugin_LDFLAGS)
 LIBS += $(noplugin_LIBS)
 
 endif
+
+# Extra CFLAGS for specific files
+HTS_CFLAGS_AVX2 = @hts_cflags_avx2@
+HTS_CFLAGS_AVX512 = @hts_cflags_avx512@
+HTS_CFLAGS_SSE4 = @hts_cflags_sse4@
+
+# Optional ref-cache program
+REF_CACHE_PROGRAMS = @hts_ref_cache_programs@
+REF_CACHE_EXTRA_C_FLAGS = @hts_paranoia_c_flags@
+REF_CACHE_EXTRA_LD_FLAGS = @hts_paranoia_ld_flags@
+REF_CACHE_TEST_OPTS = @hts_ref_cache_test_opts@

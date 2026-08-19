@@ -1,6 +1,6 @@
 /*  hts_defs.h -- Miscellaneous definitions.
 
-    Copyright (C) 2013-2015,2017 Genome Research Ltd.
+    Copyright (C) 2013-2015,2017, 2019-2020, 2024, 2026 Genome Research Ltd.
 
     Author: John Marshall <jm18@sanger.ac.uk>
 
@@ -25,6 +25,10 @@ DEALINGS IN THE SOFTWARE.  */
 #ifndef HTSLIB_HTS_DEFS_H
 #define HTSLIB_HTS_DEFS_H
 
+#if defined __MINGW32__
+#include <stdio.h>     // For __MINGW_PRINTF_FORMAT macro
+#endif
+
 #ifdef __clang__
 #ifdef __has_attribute
 #define HTS_COMPILER_HAS(attribute) __has_attribute(attribute)
@@ -42,10 +46,37 @@ DEALINGS IN THE SOFTWARE.  */
 #define HTS_GCC_AT_LEAST(major, minor) 0
 #endif
 
+#if HTS_COMPILER_HAS(__nonstring__) || HTS_GCC_AT_LEAST(8,1)
+#define HTS_NONSTRING __attribute__ ((__nonstring__))
+#else
+#define HTS_NONSTRING
+#endif
+
 #if HTS_COMPILER_HAS(__noreturn__) || HTS_GCC_AT_LEAST(3,0)
 #define HTS_NORETURN __attribute__ ((__noreturn__))
 #else
 #define HTS_NORETURN
+#endif
+
+#if HTS_GCC_AT_LEAST(10,1)
+#define HTS_ACCESS(access_mode, ...) __attribute__ ((access(access_mode, __VA_ARGS__)))
+#else
+#define HTS_ACCESS(access_mode, ...)
+#endif
+
+// Enable optimisation level 3, especially for gcc.  To be used
+// where we want to force vectorisation in hot loops and the default -O2
+// just doesn't cut it.
+#if HTS_COMPILER_HAS(optimize) || HTS_GCC_AT_LEAST(4,4)
+#define HTS_OPT3 __attribute__((optimize("O3")))
+#else
+#define HTS_OPT3
+#endif
+
+#if HTS_COMPILER_HAS(aligned) || HTS_GCC_AT_LEAST(4,3)
+#define HTS_ALIGN32 __attribute__((aligned(32)))
+#else
+#define HTS_ALIGN32
 #endif
 
 // GCC introduced warn_unused_result in 3.4 but added -Wno-unused-result later
@@ -69,7 +100,7 @@ DEALINGS IN THE SOFTWARE.  */
 #define HTS_DEPRECATED(message)
 #endif
 
-#if HTS_COMPILER_HAS(__deprecated__) || HTS_GCC_AT_LEAST(6,4)
+#if (HTS_COMPILER_HAS(__deprecated__) || HTS_GCC_AT_LEAST(6,4)) && !defined(__ICC)
 #define HTS_DEPRECATED_ENUM(message) __attribute__ ((__deprecated__ (message)))
 #else
 #define HTS_DEPRECATED_ENUM(message)
@@ -91,6 +122,33 @@ DEALINGS IN THE SOFTWARE.  */
 #define HTS_FORMAT(type, idx, first) __attribute__((__format__ (type, idx, first)))
 #else
 #define HTS_FORMAT(type, idx, first)
+#endif
+
+#if defined(_WIN32) || defined(__CYGWIN__)
+#if defined(HTS_BUILDING_LIBRARY)
+#define HTSLIB_EXPORT __declspec(dllexport)
+#else
+#define HTSLIB_EXPORT
+#endif
+#elif HTS_COMPILER_HAS(__visibility__) || HTS_GCC_AT_LEAST(4,0)
+#define HTSLIB_EXPORT __attribute__((__visibility__("default")))
+#elif defined(__SUNPRO_C) && __SUNPRO_C >= 0x550
+#define HTSLIB_EXPORT __global
+#else
+#define HTSLIB_EXPORT
+#endif
+
+// Prefetch implementations.
+// We only support a basic implementation here
+#ifdef HAVE___BUILTIN_PREFETCH
+static inline void hts_prefetch(void *p) {
+    __builtin_prefetch(p);
+}
+#else
+static inline void hts_prefetch(void *p) {
+    // Fetch and discard is quite close to a genuine prefetch
+    *(volatile char *)p;
+}
 #endif
 
 #endif

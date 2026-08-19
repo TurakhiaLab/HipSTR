@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2012-2013 Genome Research Ltd.
+Copyright (c) 2012-2015, 2018, 2020, 2023, 2026 Genome Research Ltd.
 Author: James Bonfield <jkb@sanger.ac.uk>
 
 Redistribution and use in source and binary forms, with or without
@@ -28,10 +28,10 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef _CRAM_ENCODINGS_H_
-#define _CRAM_ENCODINGS_H_
+#ifndef CRAM_CODECS_H
+#define CRAM_CODECS_H
 
-#include <inttypes.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,7 +49,7 @@ struct cram_codec;
  * appears.
  */
 typedef struct {
-    int32_t symbol;
+    int64_t symbol;
     int32_t p; // next code start value, minus index to codes[]
     int32_t code;
     int32_t len;
@@ -58,6 +58,7 @@ typedef struct {
 typedef struct {
     int ncodes;
     cram_huffman_code *codes;
+    int option;
 } cram_huffman_decoder;
 
 #define MAX_HUFF 128
@@ -65,6 +66,7 @@ typedef struct {
     cram_huffman_code *codes;
     int nvals;
     int val2code[MAX_HUFF+1]; // value to code lookup for small values
+    int option;
 } cram_huffman_encoder;
 
 typedef struct {
@@ -108,12 +110,11 @@ typedef struct {
 /*
  * A generic codec structure.
  */
-#ifdef __SUNPRO_C
-#  pragma error_messages(off, E_ANONYMOUS_UNION_DECL)
-#endif
-typedef struct cram_codec {
+struct cram_codec {
     enum cram_encoding codec;
     cram_block *out;
+    varint_vec *vv;
+    int codec_id;
     void (*free)(struct cram_codec *codec);
     int (*decode)(cram_slice *slice, struct cram_codec *codec,
                   cram_block *in, char *out, int *out_size);
@@ -121,6 +122,10 @@ typedef struct cram_codec {
                   char *in, int in_size);
     int (*store)(struct cram_codec *codec, cram_block *b, char *prefix,
                  int version);
+    int (*size)(cram_slice *slice, struct cram_codec *codec);
+    int (*flush)(struct cram_codec *codec);
+    cram_block *(*get_block)(cram_slice *slice, struct cram_codec *codec);
+    int (*describe)(struct cram_codec *codec, kstring_t *ks);
 
     union {
         cram_huffman_decoder         huffman;
@@ -136,20 +141,18 @@ typedef struct cram_codec {
         cram_byte_array_stop_decoder e_byte_array_stop;
         cram_byte_array_len_encoder  e_byte_array_len;
         cram_beta_decoder            e_beta;
-    };
-} cram_codec;
-#ifdef __SUNPRO_C
-#  pragma error_messages(default, E_ANONYMOUS_UNION_DECL)
-#endif
+    } u;
+};
 
 const char *cram_encoding2str(enum cram_encoding t);
 
-cram_codec *cram_decoder_init(enum cram_encoding codec, char *data, int size,
+cram_codec *cram_decoder_init(cram_block_compression_hdr *hdr,
+                              enum cram_encoding codec, char *data, int size,
                               enum cram_external_type option,
-                              int version);
+                              int version, varint_vec *vv);
 cram_codec *cram_encoder_init(enum cram_encoding codec, cram_stats *st,
                               enum cram_external_type option, void *dat,
-                              int version);
+                              int version, varint_vec *vv);
 
 //int cram_decode(void *codes, char *in, int in_size, char *out, int *out_size);
 //void cram_decoder_free(void *codes);
@@ -164,9 +167,8 @@ cram_codec *cram_encoder_init(enum cram_encoding codec, cram_stats *st,
  *         1 if not.
  */
 
-static inline int cram_not_enough_bits(cram_block *blk, int nbits) {
-    if (nbits < 0 ||
-        (blk->byte >= blk->uncomp_size && nbits > 0) ||
+static inline int cram_not_enough_bits(cram_block *blk, uint64_t nbits) {
+    if ((blk->byte >= blk->uncomp_size && nbits > 0) ||
         (blk->uncomp_size - blk->byte <= INT32_MAX / 8 + 1 &&
          (blk->uncomp_size - blk->byte) * 8 + blk->bit - 7 < nbits)) {
         return 1;
@@ -198,4 +200,4 @@ int cram_codec_decoder2encoder(cram_fd *fd, cram_codec *c);
 }
 #endif
 
-#endif /* _CRAM_ENCODINGS_H_ */
+#endif /* CRAM_CODECS_H */

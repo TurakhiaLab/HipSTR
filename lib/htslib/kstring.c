@@ -1,6 +1,7 @@
 /* The MIT License
 
    Copyright (C) 2011 by Attractive Chaos <attractor@live.co.uk>
+   Copyright (C) 2013-2018, 2020-2021, 2023, 2025-2026 Genome Research Ltd.
 
    Permission is hereby granted, free of charge, to any person obtaining
    a copy of this software and associated documentation files (the
@@ -23,6 +24,7 @@
    SOFTWARE.
 */
 
+#define HTS_BUILDING_LIBRARY // Enables HTSLIB_EXPORT, see htslib/hts_defs.h
 #include <config.h>
 
 #include <stdarg.h>
@@ -32,6 +34,7 @@
 #include <stdint.h>
 #include <math.h>
 #include "htslib/kstring.h"
+#include "htslib/hts_alloc.h"
 
 int kputd(double d, kstring_t *s) {
 	int len = 0;
@@ -55,84 +58,83 @@ int kputd(double d, kstring_t *s) {
 		if (ks_resize(s, s->l + 50) < 0)
 			return EOF;
 		// We let stdio handle the exponent cases
-		int s2 = sprintf(s->s + s->l, "%g", d);
+		int s2 = snprintf(s->s + s->l, s->m - s->l, "%g", d);
 		len += s2;
 		s->l += s2;
 		return len;
 	}
 
-	uint64_t i = d*10000000000LL;
 	// Correction for rounding - rather ugly
-
 	// Optimised for small numbers.
-	// Better still would be __builtin_clz on hi/lo 32 and get the
-	// starting point very rapidly.
-	if (d<.0001)
-		i+=0;
-	else if (d<0.001)
-		i+=5;
-	else if (d < 0.01)
-		i+=50;
-	else if (d < 0.1)
-		i+=500;
-	else if (d < 1)
-		i+=5000;
-	else if (d < 10)
-		i+=50000;
-	else if (d < 100)
-		i+=500000;
-	else if (d < 1000)
-		i+=5000000;
-	else if (d < 10000)
-		i+=50000000;
-	else if (d < 100000)
-		i+=500000000;
-	else
-		i+=5000000000LL;
 
-	do {
-		*--cp = '0' + i%10;
-		i /= 10;
-	} while (i >= 1);
-	buf[20] = 0;
+	uint32_t i;
+	if (d<0.001)         i = rint(d*1000000000), cp -= 1;
+	else if (d < 0.01)   i = rint(d*100000000),  cp -= 2;
+	else if (d < 0.1)    i = rint(d*10000000),   cp -= 3;
+	else if (d < 1)      i = rint(d*1000000),    cp -= 4;
+	else if (d < 10)     i = rint(d*100000),     cp -= 5;
+	else if (d < 100)    i = rint(d*10000),      cp -= 6;
+	else if (d < 1000)   i = rint(d*1000),       cp -= 7;
+	else if (d < 10000)  i = rint(d*100),        cp -= 8;
+	else if (d < 100000) i = rint(d*10),         cp -= 9;
+	else                 i = rint(d),            cp -= 10;
+
+	// integer i is always 6 digits, so print it 2 at a time.
+	static const char kputuw_dig2r[] =
+		"00010203040506070809"
+		"10111213141516171819"
+		"20212223242526272829"
+		"30313233343536373839"
+		"40414243444546474849"
+		"50515253545556575859"
+		"60616263646566676869"
+		"70717273747576777879"
+		"80818283848586878889"
+		"90919293949596979899";
+
+	memcpy(cp-=2, &kputuw_dig2r[2*(i%100)], 2); i /= 100;
+	memcpy(cp-=2, &kputuw_dig2r[2*(i%100)], 2); i /= 100;
+	memcpy(cp-=2, &kputuw_dig2r[2*(i%100)], 2);
+
+	// Except when it rounds up (d=0.009999999 is i=1000000)
+	if (i >= 100)
+		*--cp = '0' + (i/100);
+
+
 	int p = buf+20-cp;
-	if (p <= 10) { // d < 1
-		//assert(d/1);
-		cp[6] = 0; ep = cp+5;// 6 precision
-		while (p < 10) {
+	if (p <= 10) { /* d < 1 */
+		// 0.00123 is 123, so add leading zeros and 0.
+		ep = cp+5; // 6 precision
+		while (p < 10) { // aka d < 1
 			*--cp = '0';
 			p++;
 		}
 		*--cp = '.';
 		*--cp = '0';
 	} else {
+		// 123.001 is 123001 with p==13, so move 123 down and add "."
+		// Equiv to memmove(cp-1, cp, p-10); cp--;
 		char *xp = --cp;
+		ep = cp+6;
 		while (p > 10) {
 			xp[0] = xp[1];
-			p--;
 			xp++;
+			p--;
 		}
 		xp[0] = '.';
-		cp[7] = 0; ep=cp+6;
-		if (cp[6] == '.') cp[6] = 0;
 	}
 
 	// Cull trailing zeros
 	while (*ep == '0' && ep > cp)
 		ep--;
-	char *z = ep+1;
-	while (ep > cp) {
-		if (*ep == '.') {
-			if (z[-1] == '.')
-				z[-1] = 0;
-			else
-				z[0] = 0;
-			break;
-		}
-		ep--;
-	}
 
-	int sl = strlen(cp);
+	// End can be 1 out due to the mostly-6 but occasionally 7 (i==1) case.
+	// Also code with "123." which should be "123"
+	if (*ep && *ep != '.')
+		ep++;
+	*ep = 0;
+
+	int sl = ep-cp;
 	len += sl;
 	kputsn(cp, sl, s);
 	return len;
@@ -149,6 +151,15 @@ int kvsprintf(kstring_t *s, const char *fmt, va_list ap)
 		l = kputd(d, s);
 		va_end(args);
 		return l;
+	}
+
+	if (!s->s) {
+		const size_t sz = 64;
+		s->s = malloc(sz);
+		if (!s->s)
+			return -1;
+		s->m = sz;
+		s->l = 0;
 	}
 
 	l = vsnprintf(s->s + s->l, s->m - s->l, fmt, args); // This line does not work with glibc 2.0. See `man snprintf'.
@@ -193,8 +204,17 @@ char *kstrtok(const char *str, const char *sep_in, ks_tokaux_t *aux)
 		for (p = start; *p; ++p)
 			if (aux->tab[*p>>6]>>(*p&0x3f)&1) break;
 	} else {
-		for (p = start; *p; ++p)
-			if (*p == aux->sep) break;
+		// Using strchr is fast for next token, but slower for
+		// last token due to extra pass from strlen.  Overall
+		// on a VCF parse this func was 146% faster with // strchr.
+		// Equiv to:
+		// for (p = start; *p; ++p) if (*p == aux->sep) break;
+
+		// NB: We could use strchrnul() here from glibc if detected,
+		// which is ~40% faster again, but it's not so portable.
+		// i.e.   p = (uint8_t *)strchrnul((char *)start, aux->sep);
+		uint8_t *p2 = (uint8_t *)strchr((char *)start, aux->sep);
+		p = p2 ? p2 : start + strlen((char *)start);
 	}
 	aux->p = (const char *) p; // end of token
 	if (*p == 0) aux->finished = 1; // no more tokens
@@ -214,7 +234,7 @@ int ksplit_core(char *s, int delimiter, int *_max, int **_offsets)
 			if (n == max) {					\
 				int *tmp;				\
 				max = max? max<<1 : 2;			\
-				if ((tmp = (int*)realloc(offsets, sizeof(int) * max))) {  \
+				if ((tmp = hts_realloc_p(offsets, sizeof(int), max))) {  \
 					offsets = tmp;			\
 				} else	{				\
 					free(offsets);			\
@@ -271,23 +291,132 @@ int kgetline(kstring_t *s, kgets_func *fgets_fn, void *fp)
 	return 0;
 }
 
+// Wrap around fgets to get the right signature for kgets_func
+static char * fgets_wrapper(char *buffer, int size, void *stream)
+{
+    return fgets(buffer, size, (FILE *) stream);
+}
+
+int kfgetline(kstring_t *s, FILE *fp)
+{
+    if (!s || !fp)
+        return EOF;
+    return kgetline(s, fgets_wrapper, fp);
+}
+
+int kgetline2(kstring_t *s, kgets_func2 *fgets_fn, void *fp)
+{
+	size_t l0 = s->l;
+
+	while (s->l == l0 || s->s[s->l-1] != '\n') {
+		if (s->m - s->l < 200) {
+			// We return EOF for both EOF and error and the caller
+			// needs to check for errors in fp, and we haven't
+			// even got there yet.
+			//
+			// The only way of propagating memory errors is to
+			// deliberately call something that we know triggers
+			// and error so fp is also set.  This works for
+			// hgets, but not for gets where reading <= 0 bytes
+			// isn't an error.
+			if (ks_resize(s, s->m + 200) < 0) {
+				fgets_fn(s->s + s->l, 0, fp);
+				return EOF;
+			}
+		}
+		ssize_t len = fgets_fn(s->s + s->l, s->m - s->l, fp);
+		if (len <= 0) break;
+		s->l += len;
+	}
+
+	if (s->l == l0) return EOF;
+
+	if (s->l > l0 && s->s[s->l-1] == '\n') {
+		s->l--;
+		if (s->l > l0 && s->s[s->l-1] == '\r') s->l--;
+	}
+	s->s[s->l] = '\0';
+	return 0;
+}
+
+typedef unsigned char ubyte_t;
+
+/**********************
+ * Karp-Rabin search  *
+ **********************/
+
+// Backup solution for when we can't use Boyer-Moore, e.g. due to memory
+// required.  Karp-Rabin only needs to store a couple of hash values
+// so will always complete.
+
+static uint64_t fast_exp(uint64_t x, uint64_t n)
+{
+	uint64_t y = 1;
+	if (n == 0)
+		return 1;
+	while (n > 1) {
+		if (n & 1)
+			y *= x;
+		x *= x;
+		n >>= 1;
+	}
+	return y * x;
+}
+
+static void * karp_rabin(const void *str_, size_t n, const void *pat_, size_t m)
+{
+	const ubyte_t *str = (const ubyte_t *) str_;
+	const ubyte_t *pat = (const ubyte_t *) pat_;
+	const uint64_t b = 31;
+	uint64_t hash_pat = 0;
+	uint64_t hash_str = 0;
+	uint64_t b_to_m = fast_exp(b, m);
+	size_t i;
+	ubyte_t mismatch = 0;
+
+	if (m > n)
+		return NULL;
+
+	// Calculate hash of pat and initial part of str.
+	for (i = 0; i < m; i++) {
+		mismatch |= str[i] ^ pat[i];
+		hash_pat = hash_pat * b + pat[i] + 1U;
+		hash_str = hash_str * b + str[i] + 1U;
+	}
+
+	if (!mismatch) // Match found at start (or m == 0)
+		return (void *) str_;
+
+	for (; i < n; i++) {
+		hash_str = hash_str * b + str[i] + 1U - b_to_m * (str[i - m] + 1U);
+		if (hash_str == hash_pat) {
+			if (memcmp(pat, str + i + 1 - m, m) == 0)
+				return (void *) (str + i + 1 - m);
+		}
+	}
+	return NULL;
+}
+
 /**********************
  * Boyer-Moore search *
  **********************/
 
-typedef unsigned char ubyte_t;
 
 // reference: http://www-igm.univ-mlv.fr/~lecroq/string/node14.html
 static int *ksBM_prep(const ubyte_t *pat, int m)
 {
 	int i, *suff, *prep, *bmGs, *bmBc;
-	prep = (int*)calloc(m + 256, sizeof(int));
+	if (m < 1)
+		return NULL;
+	prep = hts_calloc_ps(sizeof(int), m, 256);
+	if (!prep) return NULL;
 	bmGs = prep; bmBc = prep + m;
 	{ // preBmBc()
 		for (i = 0; i < 256; ++i) bmBc[i] = m;
 		for (i = 0; i < m - 1; ++i) bmBc[pat[i]] = m - i - 1;
 	}
 	suff = (int*)calloc(m, sizeof(int));
+	if (!suff) { free(prep); return NULL; }
 	{ // suffixes()
 		int f = 0, g;
 		suff[m - 1] = m;
@@ -318,14 +447,36 @@ static int *ksBM_prep(const ubyte_t *pat, int m)
 	return prep;
 }
 
-void *kmemmem(const void *_str, int n, const void *_pat, int m, int **_prep)
+static void *boyer_moore(const void *str_, size_t n, const void *pat_, int m,
+						 int **stored_prep_ptr)
 {
-	int i, j, *prep = 0, *bmGs, *bmBc;
+	size_t j;
+	int i, *prep = 0, *bmGs, *bmBc;
 	const ubyte_t *str, *pat;
-	str = (const ubyte_t*)_str; pat = (const ubyte_t*)_pat;
-	prep = (_prep == 0 || *_prep == 0)? ksBM_prep(pat, m) : *_prep;
-	if (_prep && *_prep == 0) *_prep = prep;
-	bmGs = prep; bmBc = prep + m;
+
+	if (!str_ || !pat_)
+		return (void *) str_;
+
+	str = (const ubyte_t*) str_;
+	pat = (const ubyte_t*) pat_;
+
+	if (m <= 0) // Empty string always matches at the start
+		return (void *) str_;
+	if (n < m)  // Input shorter than pattern can't match
+		return NULL;
+	if (m == 1) // Switch to memchr for 1 byte patterns (likely faster)
+		return memchr(str, pat[0], n);
+
+	if (stored_prep_ptr && *stored_prep_ptr) {
+		prep = *stored_prep_ptr;
+	} else {
+		prep = ksBM_prep(pat, m);
+		if (!prep) return karp_rabin(str_, n, pat_, m);
+		if (stored_prep_ptr)
+			*stored_prep_ptr = prep;
+	}
+	bmGs = prep;      // Good-suffix shift array
+	bmBc = prep + m;  // Bad character shift array
 	j = 0;
 	while (j <= n - m) {
 		for (i = m - 1; i >= 0 && pat[i] == str[i+j]; --i);
@@ -333,20 +484,43 @@ void *kmemmem(const void *_str, int n, const void *_pat, int m, int **_prep)
 			int max = bmBc[str[i+j]] - m + 1 + i;
 			if (max < bmGs[i]) max = bmGs[i];
 			j += max;
-		} else return (void*)(str + j);
+		} else { // Match found
+			if (!stored_prep_ptr) free(prep);
+			return (void*)(str + j);
+		}
 	}
-	if (_prep == 0) free(prep);
-	return 0;
+	// No match
+	if (!stored_prep_ptr) free(prep);
+	return NULL;
 }
 
-char *kstrstr(const char *str, const char *pat, int **_prep)
+void *kmemmem(const void *str, int n, const void *pat, int m, int **prep)
 {
-	return (char*)kmemmem(str, strlen(str), pat, strlen(pat), _prep);
+	return boyer_moore(str, n >= 0 ? n : 0, pat, m, prep);
 }
 
-char *kstrnstr(const char *str, const char *pat, int n, int **_prep)
+char *kstrstr(const char *str, const char *pat, int **prep)
 {
-	return (char*)kmemmem(str, n, pat, strlen(pat), _prep);
+	size_t patlen = strlen(pat);
+	if (patlen <= INT_MAX)
+		return (char*)boyer_moore(str, strlen(str), pat, patlen, prep);
+	else
+		return karp_rabin(str, strlen(str), pat, patlen);
+}
+
+char *kstrnstr(const char *str, const char *pat, int n, int **prep)
+{
+	if (!pat || *pat == '\0')
+		return (char *) str;
+	if (n <= 0)
+		return NULL;
+	const char *endp = memchr(str, '\0', n);
+	if (endp != NULL && endp - str < n)
+		n = endp - str;
+	size_t patlen = strlen(pat);
+	if (patlen > n)
+		return NULL;
+	return (char*)boyer_moore(str, n, pat, patlen, prep);
 }
 
 /***********************

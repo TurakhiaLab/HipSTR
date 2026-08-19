@@ -1,6 +1,7 @@
 /* The MIT License
 
    Copyright (c) 2008, 2009, 2011 by Attractive Chaos <attractor@live.co.uk>
+   Copyright (C) 2014-2015, 2018, 2024-2025 Genome Research Ltd.
 
    Permission is hereby granted, free of charge, to any person obtaining
    a copy of this software and associated documentation files (the
@@ -128,6 +129,9 @@ int main() {
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+
+#include "kstring.h"
+#include "kroundup.h"
 
 /* compiler specific configuration */
 
@@ -304,6 +308,28 @@ static const double __ac_HASH_UPPER = 0.77;
 		}																\
 		return 0;														\
 	}																	\
+	SCOPE int kh_grow_to_fit_##name(kh_##name##_t *h, khint_t n_items)	\
+	{																	\
+		khint_t n_buckets;												\
+		khint_t resize_limit = (khint_t) ((double) INT_MAX * __ac_HASH_UPPER); \
+		if (n_items < h->upper_bound - h->size) {						\
+			/* Should be big enough ... */								\
+			if (n_items < h->upper_bound - h->n_occupied)				\
+				return 0; /* ... even accounting for deleted items */	\
+			/* otherwise need to remove them */							\
+			return kh_resize_##name(h, h->n_buckets - 1);				\
+		}																\
+		if (UINT_MAX - h->size < n_items)								\
+			return -2;													\
+		n_items += h->size;												\
+		if (n_items >= resize_limit)									\
+			return -2;													\
+		n_buckets = n_items > 0 ? n_items : 1;							\
+		kroundup32(n_buckets);											\
+		if (n_buckets * __ac_HASH_UPPER + 0.5 < n_items)				\
+			n_buckets *= 2;												\
+		return kh_resize_##name(h, n_buckets);							\
+	}																	\
 	SCOPE khint_t kh_put_##name(kh_##name##_t *h, khkey_t key, int *ret) \
 	{																	\
 		khint_t x;														\
@@ -352,7 +378,39 @@ static const double __ac_HASH_UPPER = 0.77;
 			__ac_set_isdel_true(h->flags, x);							\
 			--h->size;													\
 		}																\
-	}
+	}                                                                   \
+    SCOPE int kh_stats_##name(kh_##name##_t *h, khint_t *empty,         \
+                              khint_t *deleted, khint_t *hist_size,     \
+                              khint_t **hist_out)                       \
+    {                                                                   \
+        khint_t i, *hist = NULL, dist_max = 0, k, dist, step;           \
+        khint_t mask = h->n_buckets - 1;                                \
+        *empty = *deleted = *hist_size = 0;                             \
+        hist = (khint_t *) calloc(1, sizeof(*hist));                    \
+        if (!hist) { return -1; }                                       \
+        for (i = kh_begin(h); i < kh_end(h); ++i) {                     \
+            if (__ac_isempty(h->flags, i)) { (*empty)++; continue; }      \
+            if (__ac_isdel(h->flags, i)) { (*deleted)++; continue; }      \
+            k = __hash_func(h->keys[i]) & (h->n_buckets - 1);           \
+            dist = 0;                                                   \
+            step = 0;                                                   \
+            while (k != i) {                                            \
+                dist++;                                                 \
+                k = (k + (++step)) & mask;                              \
+            }                                                           \
+            if (dist_max <= dist) {                                     \
+                khint_t *new_hist = (khint_t *) realloc(hist, sizeof(*new_hist) * (dist + 1)); \
+                if (!new_hist) { free(hist); return -1; }               \
+                for (k = dist_max + 1; k <= dist; k++) new_hist[k] = 0; \
+                hist = new_hist;                                        \
+                dist_max = dist;                                        \
+            }                                                           \
+            hist[dist]++;                                               \
+        }                                                               \
+        *hist_out = hist;                                               \
+        *hist_size = dist_max + 1;                                      \
+        return 0;                                                       \
+    }
 
 #define KHASH_DECLARE(name, khkey_t, khval_t)		 					\
 	__KHASH_TYPE(name, khkey_t, khval_t) 								\
@@ -387,6 +445,7 @@ static const double __ac_HASH_UPPER = 0.77;
   @abstract     64-bit integer comparison function
  */
 #define kh_int64_hash_equal(a, b) ((a) == (b))
+
 /*! @function
   @abstract     const char* hash function
   @param  s     Pointer to a null terminated string
@@ -398,16 +457,73 @@ static kh_inline khint_t __ac_X31_hash_string(const char *s)
 	if (h) for (++s ; *s; ++s) h = (h << 5) - h + (khint_t)*s;
 	return h;
 }
+
+/*! @function
+  @abstract     const char* FNV1a hash function
+  @param  s     Pointer to a null terminated string
+  @return       The hash value
+ */
+static kh_inline khint_t __ac_FNV1a_hash_string(const char *s)
+{
+	const khint_t offset_basis = 2166136261;
+	const khint_t FNV_prime = 16777619;
+	khint_t h = offset_basis;
+	for (; *s; ++s) h = (h ^ (uint8_t) *s) * FNV_prime;
+	return h;
+}
+
 /*! @function
   @abstract     Another interface to const char* hash function
-  @param  key   Pointer to a null terminated string [const char*]
+  @param  key   Pointer to a nul terminated string [const char*]
   @return       The hash value [khint_t]
  */
-#define kh_str_hash_func(key) __ac_X31_hash_string(key)
+#define kh_str_hash_func(key) __ac_FNV1a_hash_string(key)
+
 /*! @function
   @abstract     Const char* comparison function
  */
 #define kh_str_hash_equal(a, b) (strcmp(a, b) == 0)
+
+/*! @function
+  @abstract     Kstring hash function
+  @param  s     Pointer to a kstring
+  @return       The hash value
+ */
+static kh_inline khint_t __ac_X31_hash_kstring(const kstring_t ks)
+{
+	khint_t h = 0;
+	size_t i;
+	for (i = 0; i < ks.l; i++)
+		h = (h << 5) - h + (khint_t)ks.s[i];
+	return h;
+}
+
+/*! @function
+  @abstract     Kstring hash function
+  @param  s     Pointer to a kstring
+  @return       The hash value
+ */
+static kh_inline khint_t __ac_FNV1a_hash_kstring(const kstring_t ks)
+{
+	const khint_t offset_basis = 2166136261;
+	const khint_t FNV_prime = 16777619;
+	khint_t h = offset_basis;
+	size_t i;
+	for (i = 0; i < ks.l; i++)
+		h = (h ^ (uint8_t) ks.s[i]) * FNV_prime;
+	return h;
+}
+
+/*! @function
+  @abstract     Interface to kstring hash function.
+  @param  key   Pointer to a khash; permits hashing on non-nul terminated strings.
+  @return       The hash value [khint_t]
+ */
+#define kh_kstr_hash_func(key) __ac_FNV1a_hash_kstring(key)
+/*! @function
+  @abstract     kstring comparison function
+ */
+#define kh_kstr_hash_equal(a, b) ((a).l == (b).l && strncmp((a).s, (b).s, (a).l) == 0)
 
 static kh_inline khint_t __ac_Wang_hash(khint_t key)
 {
@@ -419,7 +535,7 @@ static kh_inline khint_t __ac_Wang_hash(khint_t key)
     key ^=  (key >> 16);
     return key;
 }
-#define kh_int_hash_func2(k) __ac_Wang_hash((khint_t)key)
+#define kh_int_hash_func2(key) __ac_Wang_hash((khint_t)(key))
 
 /* --- END OF HASH FUNCTIONS --- */
 
@@ -459,6 +575,21 @@ static kh_inline khint_t __ac_Wang_hash(khint_t key)
   @param  s     New size [khint_t]
  */
 #define kh_resize(name, h, s) kh_resize_##name(h, s)
+
+/*! @function
+  @abstract     Grow a hash table to fit given number of items.
+  @param  name  Name of the hash table [symbol]
+  @param  h     Pointer to the hash table [khash_t(name)*]
+  @param  n     Number of items [khint_t]
+  @return  0 on success
+		  -1 on failure to allocate memory
+		  -2 adding @p n items would exceed the maximum capacity of the table
+  Unlike ks_resize(), this function takes account of the load factor
+  of the hash table when allocating space.  After a successful return,
+  it will be possible to add @p n items to the table without triggering
+  another resize.
+ */
+#define kh_grow_to_fit(name, h, n) kh_grow_to_fit_##name(h, n)
 
 /*! @function
   @abstract     Insert a key to the hash table.
@@ -576,7 +707,20 @@ static kh_inline khint_t __ac_Wang_hash(khint_t key)
 		code;												\
 	} }
 
-/* More conenient interfaces */
+/*! @function
+  @abstract  Gather hash table statistics
+  @param  name            Name of the hash table [symbol]
+  @param  h               Pointer to the hash table [khash_t(name)*]
+  @param  empty[out]      Number of empty hash bins
+  @param  deleted[out]    Number of hash bins with the deleted flag
+  @param  hist_size[out]  Size of @p hist array
+  @param  hist[out]       Probe count histogram
+  @return 0 on success; -1 on failure
+ */
+#define kh_stats(name, h, empty, deleted, hist_size, hist) \
+    kh_stats_##name(h, empty, deleted, hist_size, hist)
+
+/* More convenient interfaces */
 
 /*! @function
   @abstract     Instantiate a hash set containing integer keys
@@ -623,5 +767,20 @@ typedef const char *kh_cstr_t;
  */
 #define KHASH_MAP_INIT_STR(name, khval_t)								\
 	KHASH_INIT(name, kh_cstr_t, khval_t, 1, kh_str_hash_func, kh_str_hash_equal)
+
+/*! @function
+  @abstract     Instantiate a hash set containing kstring_t keys
+  @param  name  Name of the hash table [symbol]
+ */
+#define KHASH_SET_INIT_KSTR(name)										\
+	KHASH_INIT(name, kstring_t, char, 0, kh_kstr_hash_func, kh_kstr_hash_equal)
+
+/*! @function
+  @abstract     Instantiate a hash map containing kstring_t keys
+  @param  name  Name of the hash table [symbol]
+  @param  khval_t  Type of values [type]
+ */
+#define KHASH_MAP_INIT_KSTR(name, khval_t)								\
+	KHASH_INIT(name, kstring_t, khval_t, 1, kh_kstr_hash_func, kh_kstr_hash_equal)
 
 #endif /* __AC_KHASH_H */

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010 Genome Research Ltd.
+Copyright (c) 2010, 2013, 2018-2019, 2026 Genome Research Ltd.
 Author: Andrew Whitwham <aw7@sanger.ac.uk>
 
 Redistribution and use in source and binary forms, with or without
@@ -36,19 +36,21 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
    Andrew Whitwham, September 2010.
 */
 
+#define HTS_BUILDING_LIBRARY // Enables HTSLIB_EXPORT, see htslib/hts_defs.h
 #include <config.h>
 
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 
-#include "cram/string_alloc.h"
+#include "string_alloc.h"
+#include "../htslib/hts_alloc.h"
 
 #define MIN_STR_SIZE 1024
 
 
 /* creates the string pool. max_length is the initial size
-   a single string can be.  Tha max_length can grow as
+   a single string can be.  The max_length can grow as
    needed */
 
 string_alloc_t *string_pool_create(size_t max_length) {
@@ -61,6 +63,7 @@ string_alloc_t *string_pool_create(size_t max_length) {
     if (max_length < MIN_STR_SIZE) max_length = MIN_STR_SIZE;
 
     a_str->nstrings    = 0;
+    a_str->max_strings = 0;
     a_str->max_length  = max_length;
     a_str->strings     = NULL;
 
@@ -70,21 +73,30 @@ string_alloc_t *string_pool_create(size_t max_length) {
 
 /* internal function to do the actual memory allocation */
 
-static string_t *new_string_pool(string_alloc_t *a_str) {
+static string_t *new_string_pool(string_alloc_t *a_str, size_t length) {
     string_t *str;
 
-    str = realloc(a_str->strings, (a_str->nstrings + 1) * sizeof(*a_str->strings));
+    if (a_str->nstrings == a_str->max_strings) {
+        size_t new_max = (a_str->max_strings | (a_str->max_strings >> 2)) + 1;
+        str = hts_realloc_p(a_str->strings, sizeof(*a_str->strings), new_max);
 
-    if (NULL == str) return NULL;
+        if (NULL == str) return NULL;
 
-    a_str->strings = str;
+        a_str->strings = str;
+        a_str->max_strings = new_max;
+    }
+
     str = &a_str->strings[a_str->nstrings];
 
-    str->str = malloc(a_str->max_length);;
+    // increase the max length if needs be
+    size_t new_length = length > a_str->max_length ? length : a_str->max_length;
+
+    str->str = hts_malloc(new_length);
 
     if (NULL == str->str) return NULL;
 
     str->used = 0;
+    a_str->max_length = new_length;
     a_str->nstrings++;
 
     return str;
@@ -117,18 +129,17 @@ char *string_alloc(string_alloc_t *a_str, size_t length) {
     if (a_str->nstrings) {
         str = &a_str->strings[a_str->nstrings - 1];
 
-        if (str->used + length < a_str->max_length) {
+        if (length < a_str->max_length - str->used) {
             ret = str->str + str->used;
             str->used += length;
             return ret;
         }
     }
 
-    // increase the max length if needs be
     if (length > a_str->max_length) a_str->max_length = length;
 
     // need a new string pool
-    str = new_string_pool(a_str);
+    str = new_string_pool(a_str, length);
 
     if (NULL == str) return NULL;
 
@@ -139,16 +150,16 @@ char *string_alloc(string_alloc_t *a_str, size_t length) {
 
 /* equivalent to strdup */
 
-char *string_dup(string_alloc_t *a_str, char *instr) {
+char *string_dup(string_alloc_t *a_str, const char *instr) {
     return string_ndup(a_str, instr, strlen(instr));
 }
 
-char *string_ndup(string_alloc_t *a_str, char *instr, size_t len) {
+char *string_ndup(string_alloc_t *a_str, const char *instr, size_t len) {
     char *str = string_alloc(a_str, len + 1);
 
     if (NULL == str) return NULL;
 
-    strncpy(str, instr, len);
+    memcpy(str, instr, len);
     str[len] = 0;
 
     return str;

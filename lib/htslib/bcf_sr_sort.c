@@ -1,5 +1,5 @@
 /*
-    Copyright (C) 2017 Genome Research Ltd.
+    Copyright (C) 2017-2021,2024, 2026 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -22,34 +22,23 @@
     THE SOFTWARE.
 */
 
+#define HTS_BUILDING_LIBRARY // Enables HTSLIB_EXPORT, see htslib/hts_defs.h
 #include <config.h>
 
+#include <assert.h>
 #include <strings.h>
 
 #include "bcf_sr_sort.h"
 #include "htslib/khash_str2int.h"
+#include "htslib/kbitset.h"
+#include "htslib/hts_alloc.h"
 
+// Variant types and pair-wise compatibility of their combinations, see bcf_sr_init_scores()
 #define SR_REF   1
 #define SR_SNP   2
 #define SR_INDEL 4
 #define SR_OTHER 8
 #define SR_SCORE(srt,a,b) (srt)->score[((a)<<4)|(b)]
-
-// Resize a bit set.
-static inline kbitset_t *kbs_resize(kbitset_t *bs, size_t ni)
-{
-    if ( !bs ) return kbs_init(ni);
-    size_t n = (ni + KBS_ELTBITS-1) / KBS_ELTBITS;
-    if ( n==bs->n ) return bs;
-
-    bs = (kbitset_t *) realloc(bs, sizeof(kbitset_t) + n * sizeof(unsigned long));
-    if ( bs==NULL ) return NULL;
-    if ( n > bs->n )
-        memset(bs->b + bs->n, 0, (n - bs->n) * sizeof (unsigned long));
-    bs->n = n;
-    bs->b[n] = ~0UL;
-    return bs;
-}
 
 // Logical AND
 static inline int kbs_logical_and(kbitset_t *bs1, kbitset_t *bs2)
@@ -118,8 +107,8 @@ static int multi_is_exact(var_t *avar, var_t *bvar)
 {
     if ( avar->nalt != bvar->nalt ) return 0;
 
-    int alen = strlen(avar->str);
-    int blen = strlen(bvar->str);
+    size_t alen = strlen(avar->str);
+    size_t blen = strlen(bvar->str);
     if ( alen != blen ) return 0;
 
     char *abeg = avar->str;
@@ -162,7 +151,7 @@ static int multi_is_subset(var_t *avar, var_t *bvar)
     }
     return 0;
 }
-int32_t pairing_score(sr_sort_t *srt, int ivset, int jvset)
+static uint32_t pairing_score(sr_sort_t *srt, int ivset, int jvset)
 {
     varset_t *iv = &srt->vset[ivset];
     varset_t *jv = &srt->vset[jvset];
@@ -200,9 +189,9 @@ int32_t pairing_score(sr_sort_t *srt, int ivset, int jvset)
     for (i=0; i<iv->nvar; i++) cnt += srt->var[iv->var[i]].nvcf;
     for (j=0; j<jv->nvar; j++) cnt += srt->var[jv->var[j]].nvcf;
 
-    return (1<<(28+min)) + cnt;
+    return (1u<<(28+min)) + cnt;
 }
-void remove_vset(sr_sort_t *srt, int jvset)
+static void remove_vset(sr_sort_t *srt, int jvset)
 {
     if ( jvset+1 < srt->nvset )
     {
@@ -217,7 +206,7 @@ void remove_vset(sr_sort_t *srt, int jvset)
     }
     srt->nvset--;
 }
-int merge_vsets(sr_sort_t *srt, int ivset, int jvset)
+static int merge_vsets(sr_sort_t *srt, int ivset, int jvset)
 {
     int i,j;
     if ( ivset > jvset ) { i = ivset; ivset = jvset; jvset = i; }
@@ -225,11 +214,15 @@ int merge_vsets(sr_sort_t *srt, int ivset, int jvset)
     varset_t *iv = &srt->vset[ivset];
     varset_t *jv = &srt->vset[jvset];
 
+    if (INT_MAX - iv->nvar < jv->nvar)
+        return -1;
+
     kbs_bitwise_or(iv->mask,jv->mask);
 
     i = iv->nvar;
+    if (hts_resize(int, iv->nvar + jv->nvar, &iv->mvar, &iv->var, 0) < 0)
+        return -1;
     iv->nvar += jv->nvar;
-    hts_expand(int, iv->nvar, iv->mvar, iv->var);
     for (j=0; j<jv->nvar; j++,i++) iv->var[i] = jv->var[j];
 
     int *imat = srt->pmat + ivset*srt->ngrp;
@@ -241,16 +234,18 @@ int merge_vsets(sr_sort_t *srt, int ivset, int jvset)
 
     return ivset;
 }
-void push_vset(sr_sort_t *srt, int ivset)
+
+static int push_vset(sr_sort_t *srt, int ivset)
 {
     varset_t *iv = &srt->vset[ivset];
     int i,j;
     for (i=0; i<srt->sr->nreaders; i++)
     {
         vcf_buf_t *buf = &srt->vcf_buf[i];
+        if (hts_resize(bcf1_t*,buf->nrec + 1,&buf->mrec,&buf->rec,0) < 0)
+            return -1;
+        buf->rec[buf->nrec] = NULL;
         buf->nrec++;
-        hts_expand(bcf1_t*,buf->nrec,buf->mrec,buf->rec);
-        buf->rec[buf->nrec-1] = NULL;
     }
     for (i=0; i<iv->nvar; i++)
     {
@@ -263,6 +258,7 @@ void push_vset(sr_sort_t *srt, int ivset)
         }
     }
     remove_vset(srt, ivset);
+    return 0;
 }
 
 static int cmpstringp(const void *p1, const void *p2)
@@ -270,6 +266,7 @@ static int cmpstringp(const void *p1, const void *p2)
     return strcmp(* (char * const *) p1, * (char * const *) p2);
 }
 
+#define DEBUG_VSETS 0
 #if DEBUG_VSETS
 void debug_vsets(sr_sort_t *srt)
 {
@@ -291,6 +288,7 @@ void debug_vsets(sr_sort_t *srt)
 }
 #endif
 
+#define DEBUG_VBUF 0
 #if DEBUG_VBUF
 void debug_vbuf(sr_sort_t *srt)
 {
@@ -301,49 +299,53 @@ void debug_vbuf(sr_sort_t *srt)
         for (i=0; i<srt->sr->nreaders; i++)
         {
             vcf_buf_t *buf = &srt->vcf_buf[i];
-            fprintf(stderr,"\t%d", buf->rec[j] ? buf->rec[j]->pos+1 : 0);
+            fprintf(stderr,"\t%"PRIhts_pos, buf->rec[j] ? buf->rec[j]->pos+1 : 0);
         }
         fprintf(stderr,"\n");
     }
 }
 #endif
 
-char *grp_create_key(sr_sort_t *srt)
+static char *grp_create_key(sr_sort_t *srt)
 {
-    if ( !srt->str.l ) return strdup("");
-    int i;
-    hts_expand(char*,srt->noff,srt->mcharp,srt->charp);
+    if ( !srt->str.l || srt->noff <= 0) return strdup("");
+    size_t i;
+    if (hts_resize(char*,srt->noff,&srt->mcharp,&srt->charp,0) < 0) {
+        return NULL;
+    }
     for (i=0; i<srt->noff; i++)
     {
         srt->charp[i] = srt->str.s + srt->off[i];
         if ( i>0 ) srt->charp[i][-1] = 0;
     }
     qsort(srt->charp, srt->noff, sizeof(*srt->charp), cmpstringp);
-    char *ret = (char*) malloc(srt->str.l + 1), *ptr = ret;
+    char *ret = hts_malloc_ps(sizeof(*ret), srt->str.l, 1), *ptr = ret;
+    if (!ret)
+        return NULL;
     for (i=0; i<srt->noff; i++)
     {
-        int len = strlen(srt->charp[i]);
+        size_t len = strlen(srt->charp[i]);
         memcpy(ptr, srt->charp[i], len);
+        ptr[len] = i+1==srt->noff ? 0 : ';';
         ptr += len + 1;
-        ptr[-1] = i+1==srt->noff ? 0 : ';';
     }
     return ret;
 }
-int bcf_sr_sort_set_active(sr_sort_t *srt, int idx)
-{
-    hts_expand(int,idx+1,srt->mactive,srt->active);
-    srt->nactive = 1;
-    srt->active[srt->nactive - 1] = idx;
-    return 0;
-}
 int bcf_sr_sort_add_active(sr_sort_t *srt, int idx)
 {
-    hts_expand(int,idx+1,srt->mactive,srt->active);
+    if (hts_resize(int,srt->nactive+1,&srt->mactive,&srt->active,0) < 0) {
+        return -1;
+    }
     srt->nactive++;
     srt->active[srt->nactive - 1] = idx;
-    return 0;
+    return 0; // FIXME: check for errs in this function
 }
-static void bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, int min_pos)
+int bcf_sr_sort_set_active(sr_sort_t *srt, int idx)
+{
+    srt->nactive = 0;
+    return bcf_sr_sort_add_active(srt, idx);
+}
+static int bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, hts_pos_t min_pos)
 {
     if ( !srt->grp_str2int )
     {
@@ -356,6 +358,8 @@ static void bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr,
         bcf_sr_init_scores(srt);
         srt->grp_str2int = khash_str2int_init();
         srt->var_str2int = khash_str2int_init();
+        if (!srt->grp_str2int || !srt->var_str2int)
+            goto nomem;
     }
     int k;
     khash_t(str2int) *hash;
@@ -375,38 +379,71 @@ static void bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr,
     // group VCFs into groups, each with a unique combination of variants in the duplicate lines
     int ireader,ivar,irec,igrp,ivset,iact;
     for (ireader=0; ireader<readers->nreaders; ireader++) srt->vcf_buf[ireader].nrec = 0;
-    for (iact=0; iact<srt->nactive; iact++)
+    for (iact=0; iact<srt->nactive; iact++) // process each of the active readers, ie which still have a record to process
     {
         ireader = srt->active[iact];
         bcf_sr_t *reader = &readers->readers[ireader];
         int rid   = bcf_hdr_name2id(reader->header, chr);
         grp.nvar  = 0;
-        hts_expand(int,reader->nbuffer,srt->moff,srt->off);
+        if (hts_resize(int,reader->nbuffer,&srt->moff,&srt->off,0) < 0)
+            goto nomem;
         srt->noff  = 0;
         srt->str.l = 0;
         for (irec=1; irec<=reader->nbuffer; irec++)
         {
+            int e = 0;
             bcf1_t *line = reader->buffer[irec];
             if ( line->rid!=rid || line->pos!=min_pos ) break;
 
-            if ( srt->str.l ) kputc(';',&srt->str);
+            if ( srt->str.l ) e |= kputc(';',&srt->str) < 0;
             srt->off[srt->noff++] = srt->str.l;
-            size_t beg = srt->str.l;
+            size_t beg  = srt->str.l;
+            int end_pos = -1;
+            if ( srt->pair & BCF_SR_PAIR_ID )
+            {
+                e |= kputs(line->d.id,&srt->str) < 0;
+                e |= kputc(':',&srt->str) < 0;
+            }
             for (ivar=1; ivar<line->n_allele; ivar++)
             {
-                if ( ivar>1 ) kputc(',',&srt->str);
-                kputs(line->d.allele[0],&srt->str);
-                kputc('>',&srt->str);
-                kputs(line->d.allele[ivar],&srt->str);
+                if ( ivar>1 ) e |= kputc(',',&srt->str) < 0;
+                e |= kputs(line->d.allele[0],&srt->str) < 0;
+                e |= kputc('>',&srt->str) < 0;
+                e |= kputs(line->d.allele[ivar],&srt->str) < 0;
+
+                // If symbolic allele, check also the END tag in case there are multiple events,
+                // such as <DEL>s, starting at the same positions
+                if ( line->d.allele[ivar][0]=='<' )
+                {
+                    if ( end_pos==-1 )
+                    {
+                        bcf_info_t *end_info = bcf_get_info(reader->header,line,"END");
+                        if ( end_info )
+                            end_pos = (int)end_info->v1.i;  // this is only to create a unique id, we don't mind a potential int64 overflow
+                        else
+                            end_pos = 0;
+                    }
+                    if ( end_pos )
+                    {
+                        e |= kputc('/',&srt->str) < 0;
+                        e |= kputw(end_pos, &srt->str) < 0;
+                    }
+                }
             }
             if ( line->n_allele==1 )
             {
-                kputs(line->d.allele[0],&srt->str);
-                kputsn(">.",2,&srt->str);
+                e |= kputs(line->d.allele[0],&srt->str) < 0;
+                e |= kputsn(">.",2,&srt->str) < 0;
             }
 
+            if (e)
+                goto nomem;
+
             // Create new variant or attach to existing one. But careful, there can be duplicate
-            // records with the same POS,REF,ALT (e.g. in dbSNP-b142)
+            // records with the same POS,REF,ALT (e.g. in dbSNP-b142). In such case, use a
+            // hash table (srt->var_str2int) and a counter (var_idx) to ensure they are
+            // treated as separate variants, while still allowing them to be matched
+            // between readers.
             char *var_str = beg + srt->str.s;
             int ret, var_idx = 0, var_end = srt->str.l;
             while ( 1 )
@@ -418,46 +455,82 @@ static void bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr,
                 if ( var->vcf[var->nvcf-1] != ireader ) break;
 
                 srt->str.l = var_end;
-                kputw(var_idx, &srt->str);
+                if (kputw(var_idx, &srt->str) < 0)
+                    goto nomem;
                 var_str = beg + srt->str.s;
                 var_idx++;
             }
             if ( ret==-1 )
             {
-                ivar = srt->nvar++;
-                hts_expand0(var_t,srt->nvar,srt->mvar,srt->var);
+                // the variant is not present, insert
+                if (hts_resize(var_t,srt->nvar+1,&srt->mvar,&srt->var,HTS_RESIZE_CLEAR) < 0)
+                    goto nomem;
+                char *var_str_dup = strdup(var_str);
+                if (!var_str_dup)
+                    goto nomem;
+                ivar = srt->nvar;
                 srt->var[ivar].nvcf = 0;
-                khash_str2int_set(srt->var_str2int, strdup(var_str), ivar);
+                if (khash_str2int_set(srt->var_str2int, var_str_dup, ivar) < 0)
+                {
+                    free(var_str_dup);
+                    goto nomem;
+                }
                 free(srt->var[ivar].str);   // possible left-over from the previous position
+                srt->var[ivar].str = NULL;
+                srt->nvar++;
             }
             var_t *var = &srt->var[ivar];
             var->nalt = line->n_allele - 1;
             var->type = bcf_get_variant_types(line);
             srt->str.s[var_end] = 0;
             if ( ret==-1 )
+            {
                 var->str = strdup(var_str);
+                if (!var->str)
+                    goto nomem;
+            }
 
             int mvcf = var->mvcf;
+            if (hts_resize(int*, var->nvcf+1, &var->mvcf, &var->vcf, HTS_RESIZE_CLEAR)<0)
+                goto nomem;
+            if ( mvcf != var->mvcf )
+            {
+                bcf1_t **new_rec = hts_realloc_p(var->rec, sizeof(bcf1_t*), var->mvcf);
+                if (!new_rec)
+                    goto nomem;
+                var->rec = new_rec;
+            }
+            var->vcf[var->nvcf] = ireader;
+            var->rec[var->nvcf] = line;
             var->nvcf++;
-            hts_expand0(int*, var->nvcf, var->mvcf, var->vcf);
-            if ( mvcf != var->mvcf ) var->rec = (bcf1_t **) realloc(var->rec,sizeof(bcf1_t*)*var->mvcf);
-            var->vcf[var->nvcf-1] = ireader;
-            var->rec[var->nvcf-1] = line;
 
+            if (hts_resize(var_t, grp.nvar+1, &grp.mvar, &grp.var, 0) < 0)
+                goto nomem;
+            grp.var[grp.nvar] = ivar;
             grp.nvar++;
-            hts_expand(var_t,grp.nvar,grp.mvar,grp.var);
-            grp.var[grp.nvar-1] = ivar;
         }
         char *grp_key = grp_create_key(srt);
+        if (!grp_key)
+            goto nomem;
         int ret = khash_str2int_get(srt->grp_str2int, grp_key, &igrp);
         if ( ret==-1 )
         {
-            igrp = srt->ngrp++;
-            hts_expand0(grp_t, srt->ngrp, srt->mgrp, srt->grp);
+            if (hts_resize(grp_t, srt->ngrp + 1, &srt->mgrp, &srt->grp, HTS_RESIZE_CLEAR) < 0)
+            {
+                free(grp_key);
+                goto nomem;
+            }
+            igrp = srt->ngrp;
             free(srt->grp[igrp].var);
+            srt->grp[igrp].var = NULL;
             srt->grp[igrp] = grp;
             srt->grp[igrp].key = grp_key;
-            khash_str2int_set(srt->grp_str2int, grp_key, igrp);
+            if (khash_str2int_set(srt->grp_str2int, grp_key, igrp) < 0)
+            {
+                free(grp_key);
+                goto nomem;
+            }
+            srt->ngrp++;
             memset(&grp,0,sizeof(grp_t));
         }
         else
@@ -469,7 +542,8 @@ static void bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr,
     // initialize bitmask - which groups is the variant present in
     for (ivar=0; ivar<srt->nvar; ivar++)
     {
-        srt->var[ivar].mask = kbs_resize(srt->var[ivar].mask, srt->ngrp);
+        if ( kbs_resize(&srt->var[ivar].mask, srt->ngrp) < 0 )
+            goto nomem;
         kbs_clear(srt->var[ivar].mask);
     }
     for (igrp=0; igrp<srt->ngrp; igrp++)
@@ -484,16 +558,18 @@ static void bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr,
     // create the initial list of variant sets
     for (ivar=0; ivar<srt->nvar; ivar++)
     {
+        if (hts_resize(varset_t, srt->nvset + 1, &srt->mvset, &srt->vset, HTS_RESIZE_CLEAR) < 0)
+            goto nomem;
         ivset = srt->nvset++;
-        hts_expand0(varset_t, srt->nvset, srt->mvset, srt->vset);
-
         varset_t *vset = &srt->vset[ivset];
+        if (hts_resize(var_t, 1, &vset->mvar, &vset->var, HTS_RESIZE_CLEAR) < 0)
+            goto nomem;
+        vset->var[0] = ivar;
         vset->nvar = 1;
-        hts_expand0(var_t, vset->nvar, vset->mvar, vset->var);
-        vset->var[vset->nvar-1] = ivar;
         var_t *var  = &srt->var[ivar];
         vset->cnt   = var->nvcf;
-        vset->mask  = kbs_resize(vset->mask, srt->ngrp);
+        if ( kbs_resize(&vset->mask, srt->ngrp) < 0 )
+            goto nomem;
         kbs_clear(vset->mask);
         kbs_bitwise_or(vset->mask, var->mask);
 
@@ -513,8 +589,10 @@ static void bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr,
 #endif
 
     // initialize the pairing matrix
-    hts_expand(int, srt->ngrp*srt->nvset, srt->mpmat, srt->pmat);
-    hts_expand(int, srt->nvset, srt->mcnt, srt->cnt);
+    if (hts_resize(int, srt->ngrp*srt->nvset, &srt->mpmat, &srt->pmat, 0) < 0)
+        goto nomem;
+    if (hts_resize(int, srt->nvset, &srt->mcnt, &srt->cnt, 0) < 0)
+        goto nomem;
     memset(srt->pmat, 0, sizeof(*srt->pmat)*srt->ngrp*srt->nvset);
     for (ivset=0; ivset<srt->nvset; ivset++)
     {
@@ -549,17 +627,29 @@ static void bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr,
         if ( ipair!=-1 && ipair!=imax )
         {
             imax = merge_vsets(srt, imax, ipair);
+            if (imax < 0)
+                goto nomem;
             continue;
         }
 
-        push_vset(srt, imax);
+        if (push_vset(srt, imax) < 0)
+            goto nomem;
     }
 
     srt->chr = chr;
     srt->pos = min_pos;
+
+    return 0;
+
+ nomem:
+    readers->errnum = no_memory;
+    return -1;
 }
 
-int bcf_sr_sort_next(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, int min_pos)
+// Returns number of readers with the current line (may be 0)
+// On error, returns 0 but readers->errnum will have been set
+
+int bcf_sr_sort_next(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, hts_pos_t min_pos)
 {
     int i,j;
     assert( srt->nactive>0 );
@@ -569,7 +659,14 @@ int bcf_sr_sort_next(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, int mi
         srt->sr = readers;
         if ( srt->nsr < readers->nreaders )
         {
-            srt->vcf_buf = (vcf_buf_t*) realloc(srt->vcf_buf,readers->nreaders*sizeof(vcf_buf_t));
+            vcf_buf_t *new_buf = hts_realloc_p(srt->vcf_buf, sizeof(vcf_buf_t),
+                                               readers->nreaders);
+            if (!new_buf)
+            {
+                readers->errnum = no_memory;
+                return 0;
+            }
+            srt->vcf_buf = new_buf;
             memset(srt->vcf_buf + srt->nsr, 0, sizeof(vcf_buf_t)*(readers->nreaders - srt->nsr));
             if ( srt->msr < srt->nsr ) srt->msr = srt->nsr;
         }
@@ -589,7 +686,13 @@ int bcf_sr_sort_next(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, int mi
         readers->has_line[srt->active[0]] = 1;
         return 1;
     }
-    if ( !srt->chr || srt->pos!=min_pos || strcmp(srt->chr,chr) ) bcf_sr_sort_set(readers, srt, chr, min_pos);
+    if ( !srt->chr || srt->pos!=min_pos || strcmp(srt->chr,chr) )
+    {
+        if (bcf_sr_sort_set(readers, srt, chr, min_pos) < 0) {
+            readers->errnum = no_memory;
+            return 0;
+        }
+    }
 
     if ( !srt->vcf_buf[0].nrec ) return 0;
 

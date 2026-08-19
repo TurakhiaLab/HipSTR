@@ -1,6 +1,6 @@
 /*  hfile_libcurl.c -- libcurl backend for low-level file streams.
 
-    Copyright (C) 2015-2017 Genome Research Ltd.
+    Copyright (C) 2015-2017, 2019-2020, 2026 Genome Research Ltd.
 
     Author: John Marshall <jm18@sanger.ac.uk>
 
@@ -22,23 +22,27 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
+#define HTS_BUILDING_LIBRARY // Enables HTSLIB_EXPORT, see htslib/hts_defs.h
 #include <config.h>
 
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 #include <pthread.h>
 #ifndef _WIN32
 # include <sys/select.h>
 #endif
 #include <assert.h>
+#include <time.h>
 
 #include "hfile_internal.h"
 #ifdef ENABLE_PLUGINS
 #include "version.h"
 #endif
 #include "htslib/hts.h"  // for hts_version() and hts_verbose
+#include "htslib/hts_alloc.h"
 #include "htslib/kstring.h"
 #include "htslib/khash.h"
 
@@ -76,13 +80,18 @@ typedef struct {
     hdrlist fixed;                   // List of headers supplied at hopen()
     hdrlist extra;                   // List of headers from callback
     hts_httphdr_callback callback;   // Callback to get more headers
-    void *callback_data;             // Data to pass to callback
+    void *callback_data;             // Data to pass to httphdr callback
     auth_token *auth;                // Authentication token
     int auth_hdr_num;                // Location of auth_token in hdrlist extra
                                      // If -1, Authorization header is in fixed
                                      //    -2, it came from the callback
                                      //    -3, "auth_token_enabled", "false"
                                      //        passed to hopen()
+    redirect_callback redirect;      // Callback to handle 3xx redirects
+    void *redirect_data;             // Data to pass to redirect_callback
+    long *http_response_ptr;         // Location to store http response code.
+    int fail_on_error;               // Open fails on >400 response code
+                                     //    (default true)
 } http_headers;
 
 typedef struct {
@@ -104,10 +113,16 @@ typedef struct {
     unsigned can_seek : 1;  // Can (attempt to) seek on this handle
     unsigned is_recursive:1; // Opened by hfile_libcurl itself
     unsigned tried_seek : 1; // At least one seek has been attempted
+    unsigned needs_reconnect : 1; // Deferred reconnect after retryable error
     int nrunning;
     http_headers headers;
+
     off_t delayed_seek;      // Location to seek to before reading
     off_t last_offset;       // Location we're seeking from
+    off_t stream_pos;        // Current position in remote file for retry
+    char *preserved;         // Preserved buffer content on seek
+    size_t preserved_bytes;  // Number of preserved bytes
+    size_t preserved_size;   // Size of preserved buffer
 } hFILE_libcurl;
 
 static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence);
@@ -210,7 +225,46 @@ static int easy_errno(CURL *easy, CURLcode err)
         return EEXIST;
 
     default:
+        hts_log_error("Libcurl reported error %d (%s)", (int) err,
+                      curl_easy_strerror(err));
         return EIO;
+    }
+}
+
+static int is_retryable(CURL *easy, CURLcode err)
+{
+    switch (err) {
+    case CURLE_COULDNT_CONNECT:
+    case CURLE_SEND_ERROR:
+    case CURLE_RECV_ERROR:
+    case CURLE_PARTIAL_FILE:
+    case CURLE_OPERATION_TIMEDOUT:
+    case CURLE_GOT_NOTHING:
+    case CURLE_SSL_CONNECT_ERROR:
+#ifdef CURLE_HTTP2
+    case CURLE_HTTP2:
+#endif
+#ifdef CURLE_HTTP2_STREAM
+    case CURLE_HTTP2_STREAM:
+#endif
+        return 1;
+
+    case CURLE_HTTP_RETURNED_ERROR: {
+        long response = 0;
+        if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response)
+            == CURLE_OK) {
+            switch (response) {
+            case 429: case 500: case 502: case 503: case 504:
+                return 1;
+            default:
+                break;
+            }
+        }
+        return 0;
+    }
+
+    default:
+        return 0;
     }
 }
 
@@ -230,6 +284,8 @@ static int multi_errno(CURLMcode errm)
         return ENOMEM;
 
     default:
+        hts_log_error("Libcurl reported error %d (%s)", (int) errm,
+                      curl_multi_strerror(errm));
         return EIO;
     }
 }
@@ -240,10 +296,16 @@ static struct {
     char *auth_path;
     khash_t(auth_map) *auth_map;
     int allow_unencrypted_auth_header;
+    int retry_max;           // Max retry attempts (HTS_RETRY_MAX, default 3)
+    long retry_delay_ms;     // Initial retry delay in ms (HTS_RETRY_DELAY, default 500)
+    long retry_max_delay_ms; // Max retry delay in ms (HTS_RETRY_MAX_DELAY, default 60000)
+    long low_speed_limit;    // Bytes/sec threshold (HTS_LOW_SPEED_LIMIT, default 1)
+    long low_speed_time;     // Seconds below threshold (HTS_LOW_SPEED_TIME, default 60)
     pthread_mutex_t auth_lock;
     pthread_mutex_t share_lock;
-} curl = { { 0, 0, NULL }, NULL, NULL, NULL, 0, PTHREAD_MUTEX_INITIALIZER,
-           PTHREAD_MUTEX_INITIALIZER };
+} curl = { { 0, 0, NULL }, NULL, NULL, NULL, 0,
+           3, 500, 60000, 1, 60,
+           PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER };
 
 static void share_lock(CURL *handle, curl_lock_data data,
                        curl_lock_access access, void *userptr) {
@@ -262,7 +324,7 @@ static void free_auth(auth_token *tok) {
     free(tok);
 }
 
-static void libcurl_exit()
+static void libcurl_exit(void)
 {
     if (curl_share_cleanup(curl.share) == CURLSHE_OK)
         curl.share = NULL;
@@ -292,8 +354,8 @@ static void libcurl_exit()
 static int append_header(hdrlist *hdrs, const char *data, int dup) {
     if (hdrs->num == hdrs->size) {
         unsigned int new_sz = hdrs->size ? hdrs->size * 2 : 4, i;
-        struct curl_slist *new_list = realloc(hdrs->list,
-                                              new_sz * sizeof(*new_list));
+        struct curl_slist *new_list = hts_realloc_p(hdrs->list,
+                                                    sizeof(*new_list), new_sz);
         if (!new_list) return -1;
         hdrs->size = new_sz;
         hdrs->list = new_list;
@@ -456,7 +518,7 @@ static int read_auth_plain(auth_token *tok, hFILE *auth_fp) {
     kstring_t token = {0, 0, NULL};
     const char *start, *end;
 
-    if (kgetline(&line, (char * (*)(char *, int, void *)) hgets, auth_fp) < 0) goto error;
+    if (khgetline(&line, auth_fp) < 0) goto error;
     if (kputc('\0', &line) < 0) goto error;
 
     for (start = line.s; *start && isspace_c(*start); start++) {}
@@ -692,8 +754,19 @@ static int wait_perform(hFILE_libcurl *fp)
                 timeout = 10000;  // as recommended by curl_multi_timeout(3)
             }
         }
-        if (maxfd < 0 && timeout > 100)
-            timeout = 100; // as recommended by curl_multi_fdset(3)
+        if (maxfd < 0) {
+            if (timeout > 100)
+                timeout = 100; // as recommended by curl_multi_fdset(3)
+#ifdef _WIN32
+            /* Windows ignores the first argument of select, so calling select
+             * with maxfd=-1 does not give the expected result of sleeping for
+             * timeout milliseconds in the conditional block below.
+             * So sleep here and skip the next block.
+             */
+            Sleep(timeout);
+            timeout = 0;
+#endif
+        }
 
         if (timeout > 0) {
             struct timeval tval;
@@ -719,13 +792,86 @@ static size_t recv_callback(char *ptr, size_t size, size_t nmemb, void *fpv)
     hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
     size_t n = size * nmemb;
 
-    if (n > fp->buffer.len) { fp->paused = 1; return CURL_WRITEFUNC_PAUSE; }
+    if (n > fp->buffer.len) {
+        fp->paused = 1;
+        return CURL_WRITEFUNC_PAUSE;
+    }
     else if (n == 0) return 0;
 
     memcpy(fp->buffer.ptr.rd, ptr, n);
     fp->buffer.ptr.rd += n;
     fp->buffer.len -= n;
     return n;
+}
+
+
+static size_t header_callback(void *contents, size_t size, size_t nmemb,
+                              void *userp)
+{
+    size_t realsize = size * nmemb;
+    kstring_t *resp = (kstring_t *)userp;
+
+    if (kputsn((const char *)contents, realsize, resp) == EOF) {
+        return 0;
+    }
+
+    return realsize;
+}
+
+
+static void refresh_retry_config(void)
+{
+    const char *val;
+    if ((val = getenv("HTS_RETRY_MAX")) != NULL)
+        curl.retry_max = atoi(val);
+    if ((val = getenv("HTS_RETRY_DELAY")) != NULL)
+        curl.retry_delay_ms = atol(val);
+    if ((val = getenv("HTS_RETRY_MAX_DELAY")) != NULL)
+        curl.retry_max_delay_ms = atol(val);
+    if ((val = getenv("HTS_LOW_SPEED_LIMIT")) != NULL)
+        curl.low_speed_limit = atol(val);
+    if ((val = getenv("HTS_LOW_SPEED_TIME")) != NULL)
+        curl.low_speed_time = atol(val);
+}
+
+static void retry_sleep(long delay_ms)
+{
+#ifdef _WIN32
+    Sleep(delay_ms);
+#else
+    struct timespec ts;
+    ts.tv_sec = delay_ms / 1000;
+    ts.tv_nsec = (delay_ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+#endif
+}
+
+static int retry_reconnect(hFILE_libcurl *fp, off_t pos)
+{
+    int attempt;
+    long delay = curl.retry_delay_ms;
+    int save_can_seek;
+
+    for (attempt = 0; attempt < curl.retry_max; attempt++) {
+        hts_log_warning("Retrying connection (attempt %d/%d) at offset %lld",
+                        attempt + 1, curl.retry_max, (long long) pos);
+        retry_sleep(delay);
+
+        save_can_seek = fp->can_seek;
+        if (restart_from_position(fp, pos) == 0) {
+            fp->needs_reconnect = 0;
+            return 0;
+        }
+        // restart_from_position sets can_seek=0 on failure; restore it
+        fp->can_seek = save_can_seek;
+
+        // Exponential backoff
+        delay *= 2;
+        if (delay > curl.retry_max_delay_ms)
+            delay = curl.retry_max_delay_ms;
+    }
+
+    return -1;
 }
 
 static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
@@ -735,11 +881,39 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
     off_t to_skip = -1;
     ssize_t got = 0;
     CURLcode err;
+    int retry_attempts = 0;
 
+    // Handle deferred reconnection from a previous retryable error
+    if (fp->needs_reconnect) {
+        if (retry_reconnect(fp, fp->stream_pos) < 0) {
+            errno = EIO;
+            return -1;
+        }
+    }
+
+retry:
     if (fp->delayed_seek >= 0) {
-        assert(fp->base.offset == fp->delayed_seek
-               && fp->base.begin == fp->base.buffer
-               && fp->base.end == fp->base.buffer);
+        assert(fp->base.offset == fp->delayed_seek);
+
+        if (fp->preserved
+            && fp->last_offset > fp->delayed_seek
+            && fp->last_offset - fp->preserved_bytes <= fp->delayed_seek) {
+            // Can use buffer contents copied when seeking started, to
+            // avoid having to re-read data discarded by hseek().
+            // Note fp->last_offset is the offset of the *end* of the
+            // preserved buffer.
+            size_t n = fp->last_offset - fp->delayed_seek;
+            char *start = fp->preserved + (fp->preserved_bytes - n);
+            size_t bytes = n <= nbytes ? n : nbytes;
+            memcpy(buffer, start, bytes);
+            if (bytes < n) { // Part of the preserved buffer still left
+                fp->delayed_seek += bytes;
+            } else {
+                fp->last_offset = fp->delayed_seek = -1;
+            }
+            fp->stream_pos += bytes;
+            return bytes;
+        }
 
         if (fp->last_offset >= 0
             && fp->delayed_seek > fp->last_offset
@@ -754,22 +928,29 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
         }
         fp->delayed_seek = -1;
         fp->last_offset = -1;
+        fp->preserved_bytes = 0;
     }
 
     do {
         fp->buffer.ptr.rd = buffer;
         fp->buffer.len = nbytes;
         fp->paused = 0;
-        err = curl_easy_pause(fp->easy, CURLPAUSE_CONT);
-        if (err != CURLE_OK) { errno = easy_errno(fp->easy, err); return -1; }
+        if (!fp->finished) {
+            err = curl_easy_pause(fp->easy, CURLPAUSE_CONT);
+            if (err != CURLE_OK) {
+                errno = easy_errno(fp->easy, err);
+                return -1;
+            }
+        }
 
-        while (! fp->paused && ! fp->finished)
+        while (! fp->paused && ! fp->finished) {
             if (wait_perform(fp) < 0) return -1;
+        }
 
         got = fp->buffer.ptr.rd - buffer;
 
         if (to_skip >= 0) { // Skipping over a small seek
-            if (got < to_skip) { // Need to skip more data
+            if (got <= to_skip) { // Need to skip more data
                 to_skip -= got;
             } else {
                 got -= to_skip;
@@ -784,10 +965,42 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
     fp->buffer.len = 0;
 
     if (fp->finished && fp->final_result != CURLE_OK) {
+        if (is_retryable(fp->easy, fp->final_result)
+            && curl.retry_max > 0) {
+            if (got > 0) {
+                // Return partial data; defer reconnection to next call
+                fp->needs_reconnect = 1;
+                fp->stream_pos += got;
+                return got;
+            }
+            // No data; retry inline
+            if (retry_attempts < curl.retry_max) {
+                long delay = curl.retry_delay_ms;
+                int save_can_seek = fp->can_seek;
+                int i;
+                for (i = 0; i < retry_attempts; i++) {
+                    delay *= 2;
+                    if (delay > curl.retry_max_delay_ms) {
+                        delay = curl.retry_max_delay_ms;
+                        break;
+                    }
+                }
+                hts_log_warning("Retrying read (attempt %d/%d) at offset %lld",
+                                retry_attempts + 1, curl.retry_max,
+                                (long long) fp->stream_pos);
+                retry_sleep(delay);
+                if (restart_from_position(fp, fp->stream_pos) == 0) {
+                    retry_attempts++;
+                    goto retry;
+                }
+                fp->can_seek = save_can_seek;
+            }
+        }
         errno = easy_errno(fp->easy, fp->final_result);
         return -1;
     }
 
+    fp->stream_pos += got;
     return got;
 }
 
@@ -836,6 +1049,26 @@ static ssize_t libcurl_write(hFILE *fpv, const void *bufferv, size_t nbytes)
     return nbytes;
 }
 
+static void preserve_buffer_content(hFILE_libcurl *fp)
+{
+    if (fp->base.begin == fp->base.end) {
+        fp->preserved_bytes = 0;
+        return;
+    }
+    if (!fp->preserved
+        || fp->preserved_size < fp->base.limit - fp->base.buffer) {
+        fp->preserved = malloc(fp->base.limit - fp->base.buffer);
+        if (!fp->preserved) return;
+        fp->preserved_size = fp->base.limit - fp->base.buffer;
+    }
+
+    assert(fp->base.end - fp->base.begin <= fp->preserved_size);
+
+    memcpy(fp->preserved, fp->base.begin, fp->base.end - fp->base.begin);
+    fp->preserved_bytes = fp->base.end - fp->base.begin;
+    return;
+}
+
 static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence)
 {
     hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
@@ -879,8 +1112,11 @@ static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence)
            without any intervening reads. */
         if (fp->delayed_seek < 0) {
             fp->last_offset = fp->base.offset + (fp->base.end - fp->base.buffer);
+            // Stash the current hFILE buffer content in case it's useful later
+            preserve_buffer_content(fp);
         }
         fp->delayed_seek = pos;
+        fp->stream_pos = pos;
         return pos;
     }
 
@@ -892,6 +1128,7 @@ static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence)
     }
 
     fp->tried_seek = 1;
+    fp->stream_pos = pos;
     return pos;
 }
 
@@ -964,12 +1201,6 @@ static int restart_from_position(hFILE_libcurl *fp, off_t pos) {
         goto error;
     }
     temp_fp.nrunning = ++fp->nrunning;
-
-    err = curl_easy_pause(temp_fp.easy, CURLPAUSE_CONT);
-    if (err != CURLE_OK) {
-        save_errno = easy_errno(temp_fp.easy, err);
-        goto error_remove;
-    }
 
     while (! temp_fp.paused && ! temp_fp.finished)
         if (wait_perform(&temp_fp) < 0) {
@@ -1046,8 +1277,10 @@ static int libcurl_close(hFILE *fpv)
     fp->buffer.len = 0;
     fp->closing = 1;
     fp->paused = 0;
-    err = curl_easy_pause(fp->easy, CURLPAUSE_CONT);
-    if (err != CURLE_OK) save_errno = easy_errno(fp->easy, err);
+    if (!fp->finished) {
+        err = curl_easy_pause(fp->easy, CURLPAUSE_CONT);
+        if (err != CURLE_OK) save_errno = easy_errno(fp->easy, err);
+    }
 
     while (save_errno == 0 && ! fp->paused && ! fp->finished)
         if (wait_perform(fp) < 0) save_errno = errno;
@@ -1066,6 +1299,8 @@ static int libcurl_close(hFILE *fpv)
         fp->headers.callback(fp->headers.callback_data, NULL);
     free_headers(&fp->headers.fixed, 1);
     free_headers(&fp->headers.extra, 1);
+
+    free(fp->preserved);
 
     if (save_errno) { errno = save_errno; return -1; }
     else return 0;
@@ -1086,6 +1321,10 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
     CURLcode err;
     CURLMcode errm;
     int save, is_recursive;
+    kstring_t in_header = {0, 0, NULL};
+    long response;
+
+    refresh_retry_config();
 
     is_recursive = strchr(modes, 'R') != NULL;
 
@@ -1104,6 +1343,7 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
         fp->headers = *headers;
     } else {
         memset(&fp->headers, 0, sizeof(fp->headers));
+        fp->headers.fail_on_error = 1;
     }
 
     fp->file_size = -1;
@@ -1113,7 +1353,11 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
     fp->paused = fp->closing = fp->finished = fp->perform_again = 0;
     fp->can_seek = 1;
     fp->tried_seek = 0;
+    fp->needs_reconnect = 0;
     fp->delayed_seek = fp->last_offset = -1;
+    fp->stream_pos = 0;
+    fp->preserved = NULL;
+    fp->preserved_bytes = fp->preserved_size = 0;
     fp->is_recursive = is_recursive;
     fp->nrunning = 0;
     fp->easy = NULL;
@@ -1128,8 +1372,14 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
     err = curl_easy_setopt(fp->easy, CURLOPT_PRIVATE, fp);
 
     // Avoid many repeated CWD calls with FTP, instead requesting the filename
-    // by full path (as done in knet, but not strictly compliant with RFC1738).
-    err |= curl_easy_setopt(fp->easy, CURLOPT_FTP_FILEMETHOD, CURLFTPMETHOD_NOCWD);
+    // by full path (but not strictly compliant with RFC1738).
+    // Note as this is just an optimation, we don't care if it succeeds.
+    // Some libcurls are built without ftp support and this would fail in such
+    // cases (even if our URL is http://).  If we attempt to do an ftp on such
+    // a machine we'll then get a more informative error, such as protocol
+    // not supported, instead of function not implemented.
+    curl_easy_setopt(fp->easy, CURLOPT_FTP_FILEMETHOD,
+                     (long) CURLFTPMETHOD_NOCWD);
 
     if (mode == 'r') {
         err |= curl_easy_setopt(fp->easy, CURLOPT_WRITEFUNCTION, recv_callback);
@@ -1155,6 +1405,12 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
         }
     }
     err |= curl_easy_setopt(fp->easy, CURLOPT_USERAGENT, curl.useragent.s);
+    if (curl.low_speed_limit > 0 && curl.low_speed_time > 0) {
+        err |= curl_easy_setopt(fp->easy, CURLOPT_LOW_SPEED_LIMIT,
+                                curl.low_speed_limit);
+        err |= curl_easy_setopt(fp->easy, CURLOPT_LOW_SPEED_TIME,
+                                curl.low_speed_time);
+    }
     if (fp->headers.callback) {
         if (add_callback_headers(fp) != 0) goto error;
     }
@@ -1162,11 +1418,18 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
         goto error;
     if ((list = get_header_list(fp)) != NULL)
         err |= curl_easy_setopt(fp->easy, CURLOPT_HTTPHEADER, list);
-    err |= curl_easy_setopt(fp->easy, CURLOPT_FOLLOWLOCATION, 1L);
-    if (hts_verbose <= 8)
+
+    if (hts_verbose <= 8 && fp->headers.fail_on_error)
         err |= curl_easy_setopt(fp->easy, CURLOPT_FAILONERROR, 1L);
     if (hts_verbose >= 8)
         err |= curl_easy_setopt(fp->easy, CURLOPT_VERBOSE, 1L);
+
+    if (fp->headers.redirect) {
+        err |= curl_easy_setopt(fp->easy, CURLOPT_HEADERFUNCTION, header_callback);
+        err |= curl_easy_setopt(fp->easy, CURLOPT_HEADERDATA, (void *)&in_header);
+    } else {
+        err |= curl_easy_setopt(fp->easy, CURLOPT_FOLLOWLOCATION, 1L);
+    }
 
     if (err != 0) { errno = ENOSYS; goto error; }
 
@@ -1174,21 +1437,98 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
     if (errm != CURLM_OK) { errno = multi_errno(errm); goto error; }
     fp->nrunning++;
 
-    while (! fp->paused && ! fp->finished)
+    while (! fp->paused && ! fp->finished) {
         if (wait_perform(fp) < 0) goto error_remove;
+    }
+
+    curl_easy_getinfo(fp->easy, CURLINFO_RESPONSE_CODE, &response);
+    if (fp->headers.http_response_ptr) {
+        *fp->headers.http_response_ptr = response;
+    }
 
     if (fp->finished && fp->final_result != CURLE_OK) {
+        if (is_retryable(fp->easy, fp->final_result)
+            && curl.retry_max > 0) {
+            long delay = curl.retry_delay_ms;
+            int attempt, save_can_seek;
+            for (attempt = 0; attempt < curl.retry_max; attempt++) {
+                hts_log_warning("Retrying open (attempt %d/%d)",
+                                attempt + 1, curl.retry_max);
+                retry_sleep(delay);
+                save_can_seek = fp->can_seek;
+                if (restart_from_position(fp, 0) == 0) {
+                    if (!fp->finished || fp->final_result == CURLE_OK)
+                        goto open_ok;
+                    if (!is_retryable(fp->easy, fp->final_result))
+                        break;
+                }
+                fp->can_seek = save_can_seek;
+                delay *= 2;
+                if (delay > curl.retry_max_delay_ms)
+                    delay = curl.retry_max_delay_ms;
+            }
+        }
         errno = easy_errno(fp->easy, fp->final_result);
         goto error_remove;
     }
 
+open_ok:
+    if (fp->headers.redirect) {
+        if (response >= 300 && response < 400) { // redirection
+            kstring_t new_url = {0, 0, NULL};
+
+            if (fp->headers.redirect(fp->headers.redirect_data, response,
+                                     &in_header, &new_url)) {
+                errno = ENOSYS;
+                goto error;
+            }
+
+            err |= curl_easy_setopt(fp->easy, CURLOPT_URL, new_url.s);
+            err |= curl_easy_setopt(fp->easy, CURLOPT_HEADERFUNCTION, NULL);
+            err |= curl_easy_setopt(fp->easy, CURLOPT_HEADERDATA, NULL);
+            free(ks_release(&in_header));
+
+            if (err != 0) { errno = ENOSYS; goto error; }
+            free(ks_release(&new_url));
+
+            if (restart_from_position(fp, 0) < 0) {
+                goto error_remove;
+            }
+
+            if (fp->headers.http_response_ptr) {
+                curl_easy_getinfo(fp->easy, CURLINFO_RESPONSE_CODE,
+                                  fp->headers.http_response_ptr);
+            }
+
+            if (fp->finished && fp->final_result != CURLE_OK) {
+                errno = easy_errno(fp->easy, fp->final_result);
+                goto error_remove;
+            }
+        } else {
+            // we no longer need to look at the headers
+            err |= curl_easy_setopt(fp->easy, CURLOPT_HEADERFUNCTION, NULL);
+            err |= curl_easy_setopt(fp->easy, CURLOPT_HEADERDATA, NULL);
+            free(ks_release(&in_header));
+
+            if (err != 0) { errno = ENOSYS; goto error; }
+        }
+    }
+
     if (mode == 'r') {
+#if LIBCURL_VERSION_NUM >= 0x073700 // 7.55.0
+        curl_off_t offset;
+
+        if (curl_easy_getinfo(fp->easy, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
+                              &offset) == CURLE_OK && offset > 0)
+            fp->file_size = (off_t) offset;
+#else
         double dval;
+
         if (curl_easy_getinfo(fp->easy, CURLINFO_CONTENT_LENGTH_DOWNLOAD,
                               &dval) == CURLE_OK && dval >= 0.0)
             fp->file_size = (off_t) (dval + 0.1);
+#endif
     }
-
     fp->base.backend = &libcurl_backend;
     return &fp->base;
 
@@ -1199,6 +1539,7 @@ error_remove:
     errno = save;
 
 error:
+    if (fp->headers.redirect) free(in_header.s);
     save = errno;
     if (fp->easy) curl_easy_cleanup(fp->easy);
     if (fp->multi) curl_multi_cleanup(fp->multi);
@@ -1265,6 +1606,18 @@ static int parse_va_list(http_headers *headers, va_list args)
             if (strcmp(flag, "false") == 0)
                 headers->auth_hdr_num = -3;
         }
+        else if (strcmp(argtype, "redirect_callback") == 0) {
+            headers->redirect = va_arg(args, const redirect_callback);
+        }
+        else if (strcmp(argtype, "redirect_callback_data") == 0) {
+            headers->redirect_data = va_arg(args, void *);
+        }
+        else if (strcmp(argtype, "http_response_ptr") == 0) {
+            headers->http_response_ptr = va_arg(args, long *);
+        }
+        else if (strcmp(argtype, "fail_on_error") == 0) {
+            headers->fail_on_error = va_arg(args, int);
+        }
         else { errno = EINVAL; return -1; }
 
     return 0;
@@ -1317,7 +1670,8 @@ static int parse_va_list(http_headers *headers, va_list args)
 static hFILE *vhopen_libcurl(const char *url, const char *modes, va_list args)
 {
     hFILE *fp = NULL;
-    http_headers headers = { { NULL, 0, 0 }, { NULL, 0, 0 }, NULL, NULL };
+    http_headers headers = { .fail_on_error = 1 };
+
     if (parse_va_list(&headers, args) == 0) {
         fp = libcurl_open(url, modes, &headers);
     }
@@ -1337,7 +1691,8 @@ int PLUGIN_GLOBAL(hfile_plugin_init,_libcurl)(struct hFILE_plugin *self)
 
 #ifdef ENABLE_PLUGINS
     // Embed version string for examination via strings(1) or what(1)
-    static const char id[] = "@(#)hfile_libcurl plugin (htslib)\t" HTS_VERSION;
+    static const char id[] =
+        "@(#)hfile_libcurl plugin (htslib)\t" HTS_VERSION_TEXT;
     const char *version = strchr(id, '\t')+1;
 #else
     const char *version = hts_version();
@@ -1379,6 +1734,20 @@ int PLUGIN_GLOBAL(hfile_plugin_init,_libcurl)(struct hFILE_plugin *self)
     if ((auth = getenv("HTS_ALLOW_UNENCRYPTED_AUTHORIZATION_HEADER")) != NULL
         && strcmp(auth, "I understand the risks") == 0) {
         curl.allow_unencrypted_auth_header = 1;
+    }
+
+    {
+        const char *val;
+        if ((val = getenv("HTS_RETRY_MAX")) != NULL)
+            curl.retry_max = atoi(val);
+        if ((val = getenv("HTS_RETRY_DELAY")) != NULL)
+            curl.retry_delay_ms = atol(val);
+        if ((val = getenv("HTS_RETRY_MAX_DELAY")) != NULL)
+            curl.retry_max_delay_ms = atol(val);
+        if ((val = getenv("HTS_LOW_SPEED_LIMIT")) != NULL)
+            curl.low_speed_limit = atol(val);
+        if ((val = getenv("HTS_LOW_SPEED_TIME")) != NULL)
+            curl.low_speed_time = atol(val);
     }
 
     info = curl_version_info(CURLVERSION_NOW);

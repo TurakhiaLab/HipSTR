@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2012-2013 Genome Research Ltd.
+Copyright (c) 2012-2014, 2016, 2018, 2020, 2026 Genome Research Ltd.
 Author: James Bonfield <jkb@sanger.ac.uk>
 
 Redistribution and use in source and binary forms, with or without
@@ -28,6 +28,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#define HTS_BUILDING_LIBRARY // Enables HTSLIB_EXPORT, see htslib/hts_defs.h
 #include <config.h>
 
 #include <stdio.h>
@@ -39,15 +40,17 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <math.h>
+#include <inttypes.h>
 
-#include "cram/cram.h"
-#include "cram/os.h"
+#include "cram.h"
+#include "os.h"
+#include "../htslib/hts_alloc.h"
 
 cram_stats *cram_stats_create(void) {
     return calloc(1, sizeof(cram_stats));
 }
 
-void cram_stats_add(cram_stats *st, int32_t val) {
+int cram_stats_add(cram_stats *st, int64_t val) {
     st->nsamp++;
 
     //assert(val >= 0);
@@ -60,6 +63,8 @@ void cram_stats_add(cram_stats *st, int32_t val) {
 
         if (!st->h) {
             st->h = kh_init(m_i2i);
+            if (!st->h)
+                return -1;
         }
 
         k = kh_put(m_i2i, st->h, val, &r);
@@ -68,11 +73,12 @@ void cram_stats_add(cram_stats *st, int32_t val) {
         else if (r != -1)
             kh_val(st->h, k) = 1;
         else
-            ; // FIXME: handle error
+            return -1;
     }
+    return 0;
 }
 
-void cram_stats_del(cram_stats *st, int32_t val) {
+void cram_stats_del(cram_stats *st, int64_t val) {
     st->nsamp--;
 
     //assert(val >= 0);
@@ -87,11 +93,11 @@ void cram_stats_del(cram_stats *st, int32_t val) {
             if (--kh_val(st->h, k) == 0)
                 kh_del(m_i2i, st->h, k);
         } else {
-            hts_log_warning("Failed to remove val %d from cram_stats", val);
+            hts_log_warning("Failed to remove val %"PRId64" from cram_stats", val);
             st->nsamp++;
         }
     } else {
-        hts_log_warning("Failed to remove val %d from cram_stats", val);
+        hts_log_warning("Failed to remove val %"PRId64" from cram_stats", val);
         st->nsamp++;
     }
 }
@@ -127,8 +133,9 @@ void cram_stats_dump(cram_stats *st) {
  * Returns the best codec to use.
  */
 enum cram_encoding cram_stats_encoding(cram_fd *fd, cram_stats *st) {
-    int nvals, i, ntot = 0, max_val = 0, min_val = INT_MAX;
+    int nvals, i, max_val = 0, min_val = INT_MAX;
     int *vals = NULL, *freqs = NULL, vals_alloc = 0;
+    int ntot HTS_UNUSED = 0;
 
 #if DEBUG_CRAM_STATS
     cram_stats_dump(st);
@@ -140,13 +147,15 @@ enum cram_encoding cram_stats_encoding(cram_fd *fd, cram_stats *st) {
             continue;
         if (nvals >= vals_alloc) {
             vals_alloc = vals_alloc ? vals_alloc*2 : 1024;
-            vals  = realloc(vals,  vals_alloc * sizeof(int));
-            freqs = realloc(freqs, vals_alloc * sizeof(int));
-            if (!vals || !freqs) {
-                if (vals)  free(vals);
-                if (freqs) free(freqs);
+            int *vals_tmp  = hts_realloc_p(vals,  sizeof(*vals),  vals_alloc);
+            int *freqs_tmp = hts_realloc_p(freqs, sizeof(*freqs), vals_alloc);
+            if (!vals_tmp || !freqs_tmp) {
+                free(vals_tmp  ? vals_tmp  : vals);
+                free(freqs_tmp ? freqs_tmp : freqs);
                 return E_HUFFMAN; // Cannot do much else atm
             }
+            vals = vals_tmp;
+            freqs = freqs_tmp;
         }
         vals[nvals] = i;
         freqs[nvals] = st->freqs[i];
@@ -165,10 +174,15 @@ enum cram_encoding cram_stats_encoding(cram_fd *fd, cram_stats *st) {
 
             if (nvals >= vals_alloc) {
                 vals_alloc = vals_alloc ? vals_alloc*2 : 1024;
-                vals  = realloc(vals,  vals_alloc * sizeof(int));
-                freqs = realloc(freqs, vals_alloc * sizeof(int));
-                if (!vals || !freqs)
+                int *vals_tmp  = hts_realloc_p(vals,  sizeof(*vals),  vals_alloc);
+                int *freqs_tmp = hts_realloc_p(freqs, sizeof(*freqs), vals_alloc);
+                if (!vals_tmp || !freqs_tmp) {
+                    free(vals_tmp  ? vals_tmp  : vals);
+                    free(freqs_tmp ? freqs_tmp : freqs);
                     return E_HUFFMAN; // Cannot do much else atm
+                }
+                vals = vals_tmp;
+                freqs = freqs_tmp;
             }
             i = kh_key(st->h, k);
             vals[nvals]=i;
@@ -181,6 +195,8 @@ enum cram_encoding cram_stats_encoding(cram_fd *fd, cram_stats *st) {
     }
 
     st->nvals = nvals;
+    st->min_val = min_val;
+    st->max_val = max_val;
     assert(ntot == st->nsamp);
 
     free(vals);
