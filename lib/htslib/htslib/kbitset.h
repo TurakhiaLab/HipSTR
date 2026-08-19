@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2015 Genome Research Ltd.
+   Copyright (C) 2015, 2018 Genome Research Ltd.
 
    Permission is hereby granted, free of charge, to any person obtaining
    a copy of this software and associated documentation files (the
@@ -37,7 +37,7 @@
 
 	if (kbs_exists(bset, 68)) printf("68 present\n");
 
-	kbitset_iter itr;
+	kbitset_iter_t itr;
 	int i;
 	kbs_start(&itr);
 	while ((i = kbs_next(bset, &itr)) >= 0)
@@ -55,15 +55,24 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include "hts_alloc.h"
 
 #define KBS_ELTBITS (CHAR_BIT * sizeof (unsigned long))
 #define KBS_ELT(i)  ((i) / KBS_ELTBITS)
 #define KBS_MASK(i) (1UL << ((i) % KBS_ELTBITS))
 
 typedef struct kbitset_t {
-	size_t n;
+	size_t n, n_max;
 	unsigned long b[1];
 } kbitset_t;
+
+// (For internal use only.) Returns a mask (like 00011111) showing
+// which bits are in use in the last slot (for the given ni) set.
+static inline unsigned long kbs_last_mask(size_t ni)
+{
+	unsigned long mask = KBS_MASK(ni) - 1;
+	return mask? mask : ~0UL;
+}
 
 // Initialise a bit set capable of holding ni integers, 0 <= i < ni.
 // The set returned is empty if fill == 0, or all of [0,ni) otherwise.
@@ -71,11 +80,13 @@ static inline kbitset_t *kbs_init2(size_t ni, int fill)
 {
 	size_t n = (ni + KBS_ELTBITS-1) / KBS_ELTBITS;
 	kbitset_t *bs =
-		(kbitset_t *) malloc(sizeof(kbitset_t) + n * sizeof(unsigned long));
+		(kbitset_t *) hts_malloc_pse(sizeof(unsigned long), n, 0, sizeof(kbitset_t));
 	if (bs == NULL) return NULL;
-	bs->n = n;
+	bs->n = bs->n_max = n;
 	memset(bs->b, fill? ~0 : 0, n * sizeof (unsigned long));
-	bs->b[n] = ~0UL;
+	// b[n] is always non-zero (a fact used by kbs_next()).
+	bs->b[n] = kbs_last_mask(ni);
+	if (fill) bs->b[n-1] &= bs->b[n];
 	return bs;
 }
 
@@ -83,6 +94,38 @@ static inline kbitset_t *kbs_init2(size_t ni, int fill)
 static inline kbitset_t *kbs_init(size_t ni)
 {
 	return kbs_init2(ni, 0);
+}
+
+// Resize an existing bit set to be capable of holding ni_new integers.
+// Elements in [ni_old,ni_new) are added to the set if fill != 0.
+static inline int kbs_resize2(kbitset_t **bsp, size_t ni_new, int fill)
+{
+	kbitset_t *bs = *bsp;
+	size_t n = bs? bs->n : 0;
+	size_t n_new = (ni_new + KBS_ELTBITS-1) / KBS_ELTBITS;
+	if (bs == NULL || n_new > bs->n_max) {
+		bs = (kbitset_t *)
+			hts_realloc_pse(*bsp, sizeof(unsigned long), n_new, 0, sizeof(kbitset_t));
+		if (bs == NULL) return -1;
+
+		bs->n_max = n_new;
+		*bsp = bs;
+	}
+
+	bs->n = n_new;
+	if (n_new >= n)
+		memset(&bs->b[n], fill? ~0 : 0, (n_new - n) * sizeof (unsigned long));
+	bs->b[n_new] = kbs_last_mask(ni_new);
+	// Need to clear excess bits when fill!=0 or n_new<n; always is simpler.
+	bs->b[n_new-1] &= bs->b[n_new];
+	return 0;
+}
+
+// Resize an existing bit set to be capable of holding ni_new integers.
+// Returns negative on error.
+static inline int kbs_resize(kbitset_t **bsp, size_t ni_new)
+{
+	return kbs_resize2(bsp, ni_new, 0);
 }
 
 // Destroy a bit set.
@@ -101,6 +144,7 @@ static inline void kbs_clear(kbitset_t *bs)
 static inline void kbs_insert_all(kbitset_t *bs)
 {
 	memset(bs->b, ~0, bs->n * sizeof (unsigned long));
+	bs->b[bs->n-1] &= bs->b[bs->n];
 }
 
 // Insert an element into the bit set.

@@ -53,8 +53,9 @@ MIMALLOC_ROOT = lib/mimalloc
 MIMALLOC_LIB  = $(MIMALLOC_ROOT)/build/libmimalloc.a
 
 # Locally vendored libdeflate (CMake-only upstream build, no system package
-# required -- see lib/libdeflate/build). htslib's config.h defines
-# HAVE_LIBDEFLATE so bgzf.c etc. call into it instead of zlib for BGZF/gzip.
+# required -- see lib/libdeflate/build). -DHAVE_LIBDEFLATE, passed to the
+# htslib build below, makes bgzf.c etc. call into it instead of zlib for
+# BGZF/gzip; htslib's own config.h fallback does not set this on its own.
 LIBDEFLATE_ROOT = lib/libdeflate
 LIBDEFLATE_LIB  = $(LIBDEFLATE_ROOT)/build/libdeflate.a
 
@@ -219,7 +220,7 @@ $(CEPHES_LIB):
 # Rebuild htslib library if needed. Needs libdeflate built first so its
 # header/lib are present for HAVE_LIBDEFLATE (see lib/htslib/config.h).
 $(HTSLIB_LIB): $(LIBDEFLATE_LIB)
-	cd lib/htslib && $(MAKE) lib-static CPPFLAGS="-I$(CURDIR)/$(LIBDEFLATE_ROOT)"
+	cd lib/htslib && $(MAKE) lib-static CPPFLAGS="-I$(CURDIR)/$(LIBDEFLATE_ROOT) -DHAVE_LIBDEFLATE"
 
 # ====================================================================
 # 5b. THE BUILD RECIPE FOR LIBDEFLATE (vendored; CMake-only upstream build)

@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <map>
 #include <sstream>
+#include <unistd.h>
 #include <vector>
 #include <sys/stat.h>
 

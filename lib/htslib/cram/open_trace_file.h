@@ -32,7 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 /*
-Copyright (c) 2008, 2009, 2013 Genome Research Ltd.
+Copyright (c) 2008, 2009, 2013, 2018 Genome Research Ltd.
 Author: James Bonfield <jkb@sanger.ac.uk>
 
 Redistribution and use in source and binary forms, with or without
@@ -61,10 +61,10 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef _OPEN_TRACE_FILE_H_
-#define _OPEN_TRACE_FILE_H_
+#ifndef OPEN_TRACE_FILE_H
+#define OPEN_TRACE_FILE_H
 
-#include "cram/mFILE.h"
+#include "mFILE.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -82,7 +82,7 @@ extern "C" {
  * The returned data has been malloced. It is up to the caller to free this
  * memory.
  */
-char *tokenise_search_path(char *searchpath);
+char *tokenise_search_path(const char *searchpath);
 
 /*
  * Opens a trace file named 'file'. This is initially looked for as a
@@ -96,16 +96,20 @@ char *tokenise_search_path(char *searchpath);
  * all of the locations listed in 'path' (which is a colon separated list).
  * If 'path' is NULL it uses the RAWDATA environment variable instead.
  *
+ * If non-NULL *local is filled out to 1 for a local file and 0 for a remote
+ * URL.
+ *
  * Returns a mFILE pointer when found.
  *           NULL otherwise.
  */
-mFILE *open_path_mfile(char *file, char *path, char *relative_to);
+mFILE *open_path_mfile(const char *file, char *path, char *relative_to,
+                       int *local);
 
 /*
  * Returns a mFILE containing the entire contents of the url;
  *         NULL on failure.
  */
-mFILE *find_file_url(char *file, char *url);
+mFILE *find_file_url(const char *file, char *url);
 
 
 /*
@@ -116,10 +120,10 @@ mFILE *find_file_url(char *file, char *url);
  * Returns the expanded pathname if found.
  *         NULL if not
  */
-char *find_path(char *file, char *path);
+char *find_path(const char *file, const char *path);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* _OPEN_TRACE_FILE_H_ */
+#endif /* OPEN_TRACE_FILE_H */

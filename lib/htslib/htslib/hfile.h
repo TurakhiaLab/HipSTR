@@ -1,7 +1,7 @@
 /// @file htslib/hfile.h
 /// Buffered low-level input/output streams.
 /*
-    Copyright (C) 2013-2016 Genome Research Ltd.
+    Copyright (C) 2013-2022, 2025 Genome Research Ltd.
 
     Author: John Marshall <jm18@sanger.ac.uk>
 
@@ -32,11 +32,20 @@ DEALINGS IN THE SOFTWARE.  */
 
 #include "hts_defs.h"
 
+// Ensure ssize_t exists within this header. All #includes must precede this,
+// and ssize_t must be undefined again at the end of this header.
+#if defined _MSC_VER && defined _INTPTR_T_DEFINED && !defined _SSIZE_T_DEFINED && !defined ssize_t
+#define HTSLIB_SSIZE_T
+#define ssize_t intptr_t
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 struct hFILE_backend;
+struct kstring_t;
+
 /// Low-level input/output stream handle
 /** The fields of this structure are declared here solely for the benefit
 of the hFILE-related inline functions.  They may change in future releases.
@@ -48,7 +57,7 @@ typedef struct hFILE {
     char *buffer, *begin, *end, *limit;
     const struct hFILE_backend *backend;
     off_t offset;
-    unsigned at_eof:1, mobile:1, readonly:1;
+    unsigned at_eof:1, mobile:1, readonly:1, preserve:1;
     int has_errno;
     // @endcond
 } hFILE;
@@ -61,6 +70,7 @@ The usual `fopen(3)` _mode_ letters are supported: one of
 `+` (update), `e` (close on `exec(2)`), `x` (create exclusively),
 `:` (indicates scheme-specific variable arguments follow).
 */
+HTSLIB_EXPORT
 hFILE *hopen(const char *filename, const char *mode, ...) HTS_RESULT_USED;
 
 /// Associate a stream with an existing open file descriptor
@@ -70,8 +80,13 @@ Note that the file must be opened in binary mode, or else
 there will be problems on platforms that make a difference
 between text and binary mode.
 
+By default, the returned hFILE "takes ownership" of the file descriptor
+and _fd_ will be closed by hclose(). When _mode_ contains `S` (shared fd),
+hclose() will destroy the hFILE but not close the underlying _fd_.
+
 For socket descriptors (on Windows), _mode_ should contain `s`.
 */
+HTSLIB_EXPORT
 hFILE *hdopen(int fd, const char *mode) HTS_RESULT_USED;
 
 /// Report whether the file name or URL denotes remote storage
@@ -80,16 +95,34 @@ hFILE *hdopen(int fd, const char *mode) HTS_RESULT_USED;
 "Remote" means involving e.g. explicit network access, with the implication
 that callers may wish to cache such files' contents locally.
 */
+HTSLIB_EXPORT
 int hisremote(const char *filename) HTS_RESULT_USED;
+
+/// Append an extension or replace an existing extension
+/** @param buffer     The kstring to be used to store the modified filename
+    @param filename   The filename to be (copied and) adjusted
+    @param replace    If non-zero, one extension (if any) is removed first
+    @param extension  The extension to be added (e.g. ".csi")
+    @return  The modified filename (i.e., `buffer->s`), or NULL on error.
+    @since   1.10
+
+If _filename_ is an URL, alters extensions at the end of the `hier-part`,
+leaving any trailing `?query` or `#fragment` unchanged.
+*/
+HTSLIB_EXPORT
+char *haddextension(struct kstring_t *buffer, const char *filename,
+                    int replace, const char *extension) HTS_RESULT_USED;
 
 /// Flush (for output streams) and close the stream
 /** @return  0 if successful, or `EOF` (with _errno_ set) if an error occurred.
 */
+HTSLIB_EXPORT
 int hclose(hFILE *fp) HTS_RESULT_USED;
 
 /// Close the stream, without flushing or propagating errors
 /** For use while cleaning up after an error only.  Preserves _errno_.
 */
+HTSLIB_EXPORT
 void hclose_abruptly(hFILE *fp);
 
 /// Return the stream's error indicator
@@ -113,6 +146,7 @@ static inline void hclearerr(hFILE *fp)
 /** @return  The resulting offset within the stream (as per `lseek(2)`),
     or negative if an error occurred.
 */
+HTSLIB_EXPORT
 off_t hseek(hFILE *fp, off_t offset, int whence) HTS_RESULT_USED;
 
 /// Report the current stream offset
@@ -128,6 +162,7 @@ static inline off_t htell(hFILE *fp)
 */
 static inline int hgetc(hFILE *fp)
 {
+    HTSLIB_EXPORT
     extern int hgetc2(hFILE *);
     return (fp->end > fp->begin)? (unsigned char) *(fp->begin++) : hgetc2(fp);
 }
@@ -144,6 +179,7 @@ Bytes will be read into the buffer up to and including a delimiter, until
 EOF is reached, or _size-1_ bytes have been written, whichever comes first.
 The string will then be terminated with a NUL byte (`\0`).
 */
+HTSLIB_EXPORT
 ssize_t hgetdelim(char *buffer, size_t size, int delim, hFILE *fp)
     HTS_RESULT_USED;
 
@@ -172,7 +208,21 @@ hgetln(char *buffer, size_t size, hFILE *fp)
 This function can be used as a replacement for `fgets(3)`, or together with
 kstring's `kgetline()` to read arbitrarily-long lines into a _kstring_t_.
 */
+HTSLIB_EXPORT
 char *hgets(char *buffer, int size, hFILE *fp) HTS_RESULT_USED;
+
+/// Read a line from a stream and append it to a kstring
+/** @param kstr    The destination kstring
+    @param fp      The file stream
+    @return  0 on success; EOF on end of file or if an error occurred.
+    @since   1.24
+
+Reads a "\n"- or "\r\n"- terminated line from fp into kstr.
+The line read is appended without its terminator and 0 is returned;
+EOF is returned at end of file or on error.
+*/
+HTSLIB_EXPORT
+int khgetline(struct kstring_t *kstr, hFILE *fp) HTS_RESULT_USED;
 
 /// Peek at characters to be read without removing them from buffers
 /** @param fp      The file stream
@@ -185,6 +235,7 @@ char *hgets(char *buffer, int size, hFILE *fp) HTS_RESULT_USED;
 The characters peeked at remain in the stream's internal buffer, and will be
 returned by later hread() etc calls.
 */
+HTSLIB_EXPORT
 ssize_t hpeek(hFILE *fp, void *buffer, size_t nbytes) HTS_RESULT_USED;
 
 /// Read a block of characters from the file
@@ -196,6 +247,7 @@ or I/O errors.
 static inline ssize_t HTS_RESULT_USED
 hread(hFILE *fp, void *buffer, size_t nbytes)
 {
+    HTSLIB_EXPORT
     extern ssize_t hread2(hFILE *, void *, size_t, size_t);
 
     size_t n = fp->end - fp->begin;
@@ -210,6 +262,7 @@ hread(hFILE *fp, void *buffer, size_t nbytes)
 */
 static inline int hputc(int c, hFILE *fp)
 {
+    HTSLIB_EXPORT
     extern int hputc2(int, hFILE *);
     if (fp->begin < fp->limit) *(fp->begin++) = c;
     else c = hputc2(c, fp);
@@ -221,6 +274,7 @@ static inline int hputc(int c, hFILE *fp)
 */
 static inline int hputs(const char *text, hFILE *fp)
 {
+    HTSLIB_EXPORT
     extern int hputs2(const char *, size_t, size_t, hFILE *);
 
     size_t nbytes = strlen(text), n = fp->limit - fp->begin;
@@ -238,11 +292,14 @@ In the absence of I/O errors, the full _nbytes_ will be written.
 static inline ssize_t HTS_RESULT_USED
 hwrite(hFILE *fp, const void *buffer, size_t nbytes)
 {
+    HTSLIB_EXPORT
     extern ssize_t hwrite2(hFILE *, const void *, size_t, size_t);
+    HTSLIB_EXPORT
     extern int hfile_set_blksize(hFILE *fp, size_t bufsiz);
 
-    if(!fp->mobile){
-        if (fp->limit - fp->begin < nbytes){
+    if (!fp->mobile) {
+        size_t n = fp->limit - fp->begin;
+        if (n < nbytes) {
             hfile_set_blksize(fp, fp->limit - fp->buffer + nbytes);
             fp->end = fp->limit;
         }
@@ -266,6 +323,7 @@ hwrite(hFILE *fp, const void *buffer, size_t nbytes)
 
 This includes low-level flushing such as via `fdatasync(2)`.
 */
+HTSLIB_EXPORT
 int hflush(hFILE *fp) HTS_RESULT_USED;
 
 /// For hfile_mem: get the internal buffer and it's size from a hfile
@@ -274,6 +332,7 @@ int hflush(hFILE *fp) HTS_RESULT_USED;
 The buffer returned should not be freed as this will happen when the
 hFILE is closed.
 */
+HTSLIB_EXPORT
 char *hfile_mem_get_buffer(hFILE *file, size_t *length);
 
 /// For hfile_mem: get the internal buffer and it's size from a hfile.
@@ -284,10 +343,64 @@ buffer is granted to the caller, who now has responsibility for freeing
 it.  From this point onwards, the hFILE should not be used for any
 purpose other than closing.
 */
+HTSLIB_EXPORT
 char *hfile_mem_steal_buffer(hFILE *file, size_t *length);
+
+/// Fills out sc_list[] with the list of known URL schemes.
+/**
+ * @param plugin   [in]     Restricts schemes to only those from 'plugin.
+ * @param sc_list  [out]    Filled out with the scheme names
+ * @param nschemes [in/out] Size of sc_list (in) and number returned (out)
+ *
+ * Plugin may be passed in as NULL in which case all schemes are returned.
+ * Use plugin "built-in" to list the built in schemes.
+ * The size of sc_list is determined by the input value of *nschemes.
+ * This is updated to return the output size.  It is up to the caller to
+ * determine whether to call again with a larger number if this is too small.
+ *
+ * The return value represents the total number found matching plugin, which
+ * may be larger than *nschemes if too small a value was specified.
+ *
+ * @return the number of schemes found on success.
+ *         -1 on failure
+ */
+HTSLIB_EXPORT
+int hfile_list_schemes(const char *plugin, const char *sc_list[], int *nschemes);
+
+/// Fills out plist[] with the list of known hFILE plugins.
+/*
+ * @param plist    [out]    Filled out with the plugin names
+ * @param nplugins [in/out] Size of plist (in) and number returned (out)
+ *
+ * The size of plist is determined by the input value of *nplugins.
+ * This is updated to return the output size.  It is up to the caller to
+ * determine whether to call again with a larger number if this is too small.
+ *
+ * The return value represents the total number found, which may be
+ * larger than *nplugins if too small a value was specified.
+ *
+ * @return the number of plugins found on success.
+ *         -1 on failure
+ */
+HTSLIB_EXPORT
+int hfile_list_plugins(const char *plist[], int *nplugins);
+
+/// Tests for the presence of a specific hFILE plugin.
+/*
+ * @param name     The name of the plugin to query.
+ *
+ * @return 1 if found, 0 otherwise.
+ */
+HTSLIB_EXPORT
+int hfile_has_plugin(const char *name);
 
 #ifdef __cplusplus
 }
+#endif
+
+#ifdef HTSLIB_SSIZE_T
+#undef HTSLIB_SSIZE_T
+#undef ssize_t
 #endif
 
 #endif

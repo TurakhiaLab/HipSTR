@@ -9,6 +9,13 @@
 using namespace std;
 
 namespace AlignmentFilters {
+  // ASCII-only lowercase: avoids locale-aware tolower()'s per-call ctype
+  // table lookup, matching the fix already applied in AlignmentOps.cpp /
+  // NeedlemanWunsch.cpp's base_to_int().
+  static inline char ascii_tolower(char c){
+    return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
+  }
+
   template<typename CigarIterator> int GetDistToIndel(CigarIterator iter, CigarIterator end){
     // Process leading clipping ops
     if (iter != end && iter->Type == 'H')
@@ -68,7 +75,7 @@ namespace AlignmentFilters {
 	if (read_index + cigar_iter->Length > aln.Length())
 	  printErrorAndDie("Nucleotides for aligned read don't correspond to the CIGAR string");
 	for (unsigned int len = cigar_iter->Length; len > 0; len--){
-	  if ((char)tolower(ref_seq[ref_index]) == (char)tolower(aln.QueryBases()[read_index]))
+	  if (ascii_tolower(ref_seq[ref_index]) == ascii_tolower(aln.QueryBases()[read_index]))
 	    match_run++;
 	  else {
 	    if (beginning) head_match = match_run;

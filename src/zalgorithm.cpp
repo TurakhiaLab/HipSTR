@@ -12,6 +12,13 @@ Copyright (C) 2014 Thomas Willems <twillems@mit.edu>
 
 
 namespace ZAlgorithm{
+  // ASCII-only lowercase: avoids locale-aware tolower()'s per-call ctype
+  // table lookup, matching the fix already applied in AlignmentOps.cpp /
+  // NeedlemanWunsch.cpp's base_to_int().
+  static inline char ascii_tolower(char c){
+    return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
+  }
+
   static void suffix_helper(const std::string& s1, const std::string& s2, int s2_left, int s2_right,
 			    std::vector<int>& s1_matches, std::vector<int>& num_matches){
     num_matches  = std::vector<int>(s2_right - s2_left + 1, -1);
@@ -19,7 +26,7 @@ namespace ZAlgorithm{
     for (int i = s2_right; i >= s2_left; i--){
       if (i <= leftmost){
 	int index_a = s1.size()-1, index_b = i;
-	while (index_a >= 0 && index_b >= 0 && (char)tolower(s1[index_a]) == (char)tolower(s2[index_b])){
+	while (index_a >= 0 && index_b >= 0 && ascii_tolower(s1[index_a]) == ascii_tolower(s2[index_b])){
 	  index_a--;
 	  index_b--;
 	}
@@ -38,7 +45,7 @@ namespace ZAlgorithm{
 	  num_matches[i-s2_left] = i-leftmost+1;
 	else {
 	  int index_a = s1.size()-2-i+leftmost, index_b = leftmost-1;
-	  while (index_a >= 0 && index_b >= 0 && (char)tolower(s1[index_a]) == (char)tolower(s2[index_b])){
+	  while (index_a >= 0 && index_b >= 0 && ascii_tolower(s1[index_a]) == ascii_tolower(s2[index_b])){
 	    index_a--;
 	    index_b--;
 	  }
@@ -57,7 +64,7 @@ namespace ZAlgorithm{
     for (int i = s2_left; i <= s2_right; i++){
       if (i >= rightmost){
 	int index_a = 0, index_b = i;
-	while (index_a < static_cast<int>(s1.size()) && index_b < static_cast<int>(s2.size()) && (char)tolower(s1[index_a]) == (char)tolower(s2[index_b])){
+	while (index_a < static_cast<int>(s1.size()) && index_b < static_cast<int>(s2.size()) && ascii_tolower(s1[index_a]) == ascii_tolower(s2[index_b])){
 	  index_a++;
 	  index_b++;
 	}
@@ -76,7 +83,7 @@ namespace ZAlgorithm{
 	  num_matches[i-s2_left+offset] = rightmost-i+1;
 	else {
 	  int index_a = rightmost+1-i, index_b = rightmost+1;
-	  while (index_a < static_cast<int>(s1.size()) && index_b < static_cast<int>(s2.size()) && (char)tolower(s1[index_a]) == (char)tolower(s2[index_b])){
+	  while (index_a < static_cast<int>(s1.size()) && index_b < static_cast<int>(s2.size()) && ascii_tolower(s1[index_a]) == ascii_tolower(s2[index_b])){
 	    index_a++;
 	    index_b++;
 	  }

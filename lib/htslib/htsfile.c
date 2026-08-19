@@ -1,6 +1,6 @@
 /*  htsfile.c -- file identifier and minimal viewer.
 
-    Copyright (C) 2014-2018 Genome Research Ltd.
+    Copyright (C) 2014-2019 Genome Research Ltd.
 
     Author: John Marshall <jm18@sanger.ac.uk>
 
@@ -31,19 +31,22 @@ DEALINGS IN THE SOFTWARE.  */
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
-#include <unistd.h>
 
 #include "htslib/hfile.h"
 #include "htslib/hts.h"
 #include "htslib/sam.h"
 #include "htslib/vcf.h"
 
-enum { identify, view_headers, view_all } mode = identify;
+#ifndef EFTYPE
+#define EFTYPE ENOEXEC
+#endif
+
+enum { identify, view_headers, view_all, copy } mode = identify;
 int show_headers = 1;
 int verbose = 0;
 int status = EXIT_SUCCESS;  /* Exit status from main */
 
-void error(const char *format, ...)
+void HTS_FORMAT(HTS_PRINTF_FMT, 1, 2) error(const char *format, ...)
 {
     int err = errno;
     va_list args;
@@ -58,17 +61,10 @@ void error(const char *format, ...)
     status = EXIT_FAILURE;
 }
 
-static htsFile *dup_stdout(const char *mode)
-{
-    int fd = dup(STDOUT_FILENO);
-    hFILE *hfp = (fd >= 0)? hdopen(fd, mode) : NULL;
-    return hfp? hts_hopen(hfp, "-", mode) : NULL;
-}
-
 static void view_sam(samFile *in, const char *filename)
 {
     bam1_t *b = NULL;
-    bam_hdr_t *hdr = NULL;
+    sam_hdr_t *hdr = NULL;
     samFile *out = NULL;
 
     hdr = sam_hdr_read(in);
@@ -77,7 +73,7 @@ static void view_sam(samFile *in, const char *filename)
         goto clean;
     }
 
-    out = dup_stdout("w");
+    out = hts_open("-", "w");
     if (out == NULL) { error("reopening standard output failed"); goto clean; }
 
     if (show_headers) {
@@ -104,7 +100,7 @@ static void view_sam(samFile *in, const char *filename)
     }
 
  clean:
-    bam_hdr_destroy(hdr);
+    sam_hdr_destroy(hdr);
     bam_destroy1(b);
     if (out) hts_close(out);
 }
@@ -121,7 +117,7 @@ static void view_vcf(vcfFile *in, const char *filename)
         goto clean;
     }
 
-    out = dup_stdout("w");
+    out = hts_open("-", "w");
     if (out == NULL) { error("reopening standard output failed"); goto clean; }
 
     if (show_headers) {
@@ -170,12 +166,58 @@ static void view_raw(hFILE *fp, const char *filename)
     }
 }
 
+static void copy_raw(const char *srcfilename, const char *destfilename)
+{
+    hFILE *src = hopen(srcfilename, "r");
+    if (src == NULL) {
+        error("can't open \"%s\"", srcfilename);
+        return;
+    }
+
+    size_t bufsize = 1048576;
+    char *buffer = malloc(bufsize);
+    if (buffer == NULL) {
+        error("can't allocate copy buffer");
+        hclose_abruptly(src);
+        return;
+    }
+
+    hFILE *dest = hopen(destfilename, "w");
+    if (dest == NULL) {
+        error("can't create \"%s\"", destfilename);
+        hclose_abruptly(src);
+        free(buffer);
+        return;
+    }
+
+    ssize_t n;
+    while ((n = hread(src, buffer, bufsize)) > 0)
+        if (hwrite(dest, buffer, n) != n) {
+            error("writing to \"%s\" failed", destfilename);
+            hclose_abruptly(dest);
+            dest = NULL;
+            break;
+        }
+
+    if (n < 0) {
+        error("reading from \"%s\" failed", srcfilename);
+        hclose_abruptly(src);
+        src = NULL;
+    }
+
+    if (dest && hclose(dest) < 0) error("closing \"%s\" failed", destfilename);
+    if (src && hclose(src) < 0)   error("closing \"%s\" failed", srcfilename);
+    free(buffer);
+}
+
 static void usage(FILE *fp, int status)
 {
     fprintf(fp,
 "Usage: htsfile [-chHv] FILE...\n"
+"       htsfile --copy [-v] FILE DESTFILE\n"
 "Options:\n"
 "  -c, --view         Write textual form of FILEs to standard output\n"
+"  -C, --copy         Copy the exact contents of FILE to DESTFILE\n"
 "  -h, --header-only  Display only headers in view mode, not records\n"
 "  -H, --no-header    Suppress header display in view mode\n"
 "  -v, --verbose      Increase verbosity of warnings and diagnostics\n");
@@ -185,11 +227,12 @@ static void usage(FILE *fp, int status)
 int main(int argc, char **argv)
 {
     static const struct option options[] = {
+        { "copy", no_argument, NULL, 'C' },
         { "header-only", no_argument, NULL, 'h' },
         { "no-header", no_argument, NULL, 'H' },
         { "view", no_argument, NULL, 'c' },
         { "verbose", no_argument, NULL, 'v' },
-        { "help", no_argument, NULL, '?' },
+        { "help", no_argument, NULL, 2 },
         { "version", no_argument, NULL, 1 },
         { NULL, 0, NULL, 0 }
     };
@@ -197,24 +240,31 @@ int main(int argc, char **argv)
     int c, i;
 
     status = EXIT_SUCCESS;
-    while ((c = getopt_long(argc, argv, "chHv?", options, NULL)) >= 0)
+    while ((c = getopt_long(argc, argv, "cChHv", options, NULL)) >= 0)
         switch (c) {
         case 'c': mode = view_all; break;
+        case 'C': mode = copy; break;
         case 'h': mode = view_headers; show_headers = 1; break;
         case 'H': show_headers = 0; break;
         case 'v': hts_verbose++; verbose++; break;
         case 1:
             printf(
 "htsfile (htslib) %s\n"
-"Copyright (C) 2018 Genome Research Ltd.\n",
+"Copyright (C) 2026 Genome Research Ltd.\n",
                    hts_version());
             exit(EXIT_SUCCESS);
             break;
-        case '?': usage(stdout, EXIT_SUCCESS); break;
+        case 2:   usage(stdout, EXIT_SUCCESS); break;
         default:  usage(stderr, EXIT_FAILURE); break;
         }
 
     if (optind == argc) usage(stderr, EXIT_FAILURE);
+
+    if (mode == copy) {
+        if (optind + 2 != argc) usage(stderr, EXIT_FAILURE);
+        copy_raw(argv[optind], argv[optind + 1]);
+        return status;
+    }
 
     for (i = optind; i < argc; i++) {
         hFILE *fp = hopen(argv[i], "r");
@@ -225,7 +275,7 @@ int main(int argc, char **argv)
 
         if (mode == identify) {
             htsFormat fmt;
-            if (hts_detect_format(fp, &fmt) < 0) {
+            if (hts_detect_format2(fp, argv[i], &fmt) < 0) {
                 error("detecting \"%s\" format failed", argv[i]);
                 hclose_abruptly(fp);
                 continue;
@@ -258,7 +308,7 @@ int main(int argc, char **argv)
                 if (hts_close(hts) < 0) error("closing \"%s\" failed", argv[i]);
                 fp = NULL;
             }
-            else if (errno == ENOEXEC && verbose)
+            else if ((errno == EFTYPE || errno == ENOEXEC) && verbose)
                 view_raw(fp, argv[i]);
             else
                 error("can't view \"%s\"", argv[i]);
@@ -266,6 +316,9 @@ int main(int argc, char **argv)
 
         if (fp && hclose(fp) < 0) error("closing \"%s\" failed", argv[i]);
     }
+
+    if (fclose(stdout) != 0 && errno != EBADF)
+        error("closing standard output failed");
 
     return status;
 }

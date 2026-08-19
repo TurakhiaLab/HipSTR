@@ -1,5 +1,5 @@
 /*
-    Copyright (C) 2017 Genome Research Ltd.
+    Copyright (C) 2017-2019,2024 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -31,8 +31,8 @@
 
 */
 
-#ifndef __BCF_SR_SORT_H__
-#define __BCF_SR_SORT_H__
+#ifndef BCF_SR_SORT_H
+#define BCF_SR_SORT_H
 
 #include "htslib/synced_bcf_reader.h"
 #include "htslib/kbitset.h"
@@ -55,6 +55,9 @@ typedef struct
 }
 var_t;
 
+// Group is a set of variants in duplicate records within one VCF. They are identified with a key (used only
+// for debugging), such as C>A,C>G;C>T. Commas separate alleles in a multiallelic record, semicolons separate
+// VCF lines.
 typedef struct
 {
     char *key;              // only for debugging
@@ -67,7 +70,7 @@ typedef struct
 {
     int nvar, mvar, *var;   // list of compatible variants that can be output together
     int cnt;                // number of readers in this group
-    kbitset_t *mask;        // which groups are populated in this set (replace with expandable bitmask)
+    kbitset_t *mask;        // which groups are populated in this set
 }
 varset_t;
 
@@ -90,7 +93,8 @@ typedef struct
     int moff, noff, *off, mcharp;
     char **charp;
     const char *chr;
-    int pos, nsr, msr;
+    hts_pos_t pos;
+    int nsr, msr;
     int pair;
     int nactive, mactive, *active;  // list of readers with lines at the current pos
 }
@@ -98,9 +102,14 @@ sr_sort_t;
 
 sr_sort_t *bcf_sr_sort_init(sr_sort_t *srt);
 void bcf_sr_sort_reset(sr_sort_t *srt);
-int bcf_sr_sort_next(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, int pos);
+int bcf_sr_sort_next(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, hts_pos_t pos);
+
+// initialize a new position using the i-th reader
 int bcf_sr_sort_set_active(sr_sort_t *srt, int i);
+
+// add i-th reader with the same position, assumed bcf_sr_sort_set_active() was called with another reader
 int bcf_sr_sort_add_active(sr_sort_t *srt, int i);
+
 void bcf_sr_sort_destroy(sr_sort_t *srt);
 void bcf_sr_sort_remove_reader(bcf_srs_t *readers, sr_sort_t *srt, int i);
 
