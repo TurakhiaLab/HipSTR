@@ -9,9 +9,9 @@
 using namespace std;
 
 namespace AlignmentFilters {
-  // ASCII-only lowercase: avoids locale-aware tolower()'s ctype table lookup,
-  // a measured hotspot since this runs per matched base for every read
-  // (same fix as AlignmentOps.cpp / NeedlemanWunsch.cpp's base_to_int()).
+  // ASCII-only lowercase: avoids locale-aware tolower()'s per-call ctype
+  // table lookup, matching the fix already applied in AlignmentOps.cpp /
+  // NeedlemanWunsch.cpp's base_to_int().
   static inline char ascii_tolower(char c){
     return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
   }

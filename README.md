@@ -47,11 +47,12 @@ HipSTR-MT keeps the original HipSTR runtime requirements and adds a modern C++ c
 - libhts
 - libbz2
 - liblzma
+- libcurl and OpenSSL (dev headers) — vendored htslib 1.24's default build config always compiles in libcurl-backed remote-file support
 - CMake 3.18+ for building mimalloc, or the bundled Makefile fallback
 
 On Ubuntu 16+ systems, the system packages can be installed with:
 
-    apt install make g++ zlib1g-dev libhts-dev libbz2-dev liblzma-dev cmake
+    apt install make g++ zlib1g-dev libhts-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev cmake
 
 ## Installation
 Taskflow's headers and mimalloc's build-relevant source are vendored directly in this repo (the same way `lib/htslib` already is) rather than pulled in as git submodules, so a plain clone is all you need — no `--recurse-submodules`, no `git submodule update --init --recursive` to remember:
@@ -106,7 +107,7 @@ For each region in *str_regions.bed*, **HipSTR** will:
 ## HipSTR-MT Changes
 HipSTR-MT is a performance fork of [gymrek-lab/HipSTR](https://github.com/gymrek-lab/HipSTR) and that baseline is the comparison for all claims below.
 
-**Correctness**: verified with against the outputs of the Gymrek Lab's version of HipSTR: Byte identical outputs for the tutorial dataset and the NA12978, NA12891, and NA12892 datasets.
+**Correctness**: verified against the outputs of the Gymrek Lab's version of HipSTR using a tolerant VCF comparator (exact match required on genotype calls; float-typed fields allowed under 1e-3 relative drift). Genotype calls match exactly on the tutorial dataset and the NA12878/NA12891/NA12892 trio; a small number of loci show up to ~9e-4 relative drift in derived statistics (`PDP`, `GLDIFF`) from SIMD/codegen-dependent summation order.
 
 ### Parallelization
 - `bam_processor.*` replaces the single-region loop with a three-stage Taskflow pipeline: serial region token creation, parallel read filtering/genotyping, and serial ordered output. Regions are processed out of order across worker threads but written in the original BED order. Each pipeline line gets its own `BamCramMultiReader` and `AdapterTrimmer` instance, buffers its pass/filter BAM records instead of writing them inline, and all lines share one cached FASTA chromosome sequence rather than each copying it.
@@ -122,10 +123,14 @@ Two pieces of the original single-threaded code held mutable state that's safe w
 
 ### Memory optimizations
 - **`HapAligner`** reuses per-aligner scratch buffers (base-quality arrays, DP matrices, artifact size/position buffers) across reads instead of `new[]`/`delete[]` on every one. `HapAligner` instances aren't shared between threads. The two largest per-read allocations (the match/insert/deletion DP matrices, `O(read_len × haplotype_len)` each) are interleaved into one buffer (`MatrixChannel`, `[match0, insert0, deletion0, match1, ...]`) for improved cache locality.
-- **ASCII-only uppercasing** replaces locale-aware `toupper()` in three hot per-base loops (`stringops.cpp`'s `uppercase()`, `AlignmentOps.cpp`'s CIGAR-driven base comparison, `NeedlemanWunsch.cpp`'s `base_to_int()`). Small overhead removal.
+- **ASCII-only case conversion** replaces locale-aware `toupper()`/`tolower()` in hot per-base loops: `stringops.cpp`'s `uppercase()`, `AlignmentOps.cpp`'s CIGAR-driven base comparison, `NeedlemanWunsch.cpp`'s `base_to_int()`, and `zalgorithm.cpp`/`alignment_filters.cpp`'s prefix/suffix/end-match comparisons.
 - **`mathops.cpp`** adds a pointer-pair overload of `fast_log_sum_exp` (`const double* begin, const double* end`) alongside the original `vector<double>` one, avoiding a vector copy at a couple of call sites.
 - **mimalloc** is linked in by default (see Installation) to cut allocator overhead from the volume of small per-read/per-locus allocations.
 - **chromosome cache** is used to share chromosomes across threads. Since the program uses the chromosomes in order, when a chromosome is no longer in use due to all threads migrating to the next one, it is removed from the shared cache, reducing memory footprint.
+
+### Dependency and I/O fixes
+- **htslib upgraded 1.9 → 1.24.** The vendored 1.9 copy's `fai_retrieve()` read FASTA sequence one byte at a time (`bgzf_getc()` plus a locale-aware `isgraph()` check per byte). Since chromosome loading runs in the pipeline's mandatory serial stage, this cost didn't shrink with more worker threads — on the tutorial dataset it was ~66% of the wall-clock floor at high thread counts. 1.24 pulls in upstream's already-fixed block-read implementation instead of a local patch: total FASTA load time across chr1–22 dropped from 7.17s to 1.36s, and wall time at `--threads 24` dropped from ~10.85s to ~5.5–6.7s. Picking up the newer vendored source needed two small C++-compatibility fixes: an explicit cast in `cram/cram_io.h` (implicit `void*` conversion is valid C, not C++) and a missing `<unistd.h>` include in `bam_io.h`/`denovo_main.cpp` for `access()`/`F_OK`, both previously masked by htslib 1.9's transitive includes.
+- **libdeflate was linked but never active.** `HTSLIB_LIB`'s build rule was missing `-DHAVE_LIBDEFLATE`, so `bgzf.c`'s libdeflate code paths never compiled in and all BGZF/BAM decompression silently used system zlib instead. Fixed by adding the define.
 
 ### New / restored CLI flags
 - **`--threads <num_threads>`** — see Parallelization above.
@@ -222,6 +227,7 @@ The highest-value internal optimizations in this fork are:
 2. Chromosome FASTA sequences are cached once per chromosome and shared across all pipeline lines, avoiding large per-line contig copies.
 3. Haplotype-alignment DP matrices are reused inside each `HapAligner`, avoiding millions of repeated allocations in the read-alignment hot path.
 4. mimalloc is linked by default to reduce allocator overhead that remains in read and haplotype processing.
+5. htslib 1.24 replaces a byte-at-a-time FASTA reader that ran in the pipeline's serial stage with a block-read implementation, removing a bottleneck that had capped scaling at higher thread counts (see [Dependency and I/O fixes](#dependency-and-io-fixes)).
 
 For larger runs, start with `--threads` near the number of physical cores available to the job and benchmark a small representative region set. If the run is still I/O-bound or SNP-phasing-bound, splitting by chromosome with `--chrom` remains useful for distributing work across multiple jobs.
 
