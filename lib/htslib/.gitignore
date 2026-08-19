@@ -15,6 +15,7 @@ config.h.in
 config.log
 config.mk
 config.status
+config_vars.h
 configure
 
 hfile_*.bundle
