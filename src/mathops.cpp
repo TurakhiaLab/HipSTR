@@ -20,6 +20,7 @@ void precompute_integer_logs(){
 
 double int_log(int val){ return INT_LOGS[val]; }
 
+__attribute__((target_clones("avx512f,avx2,sse4.2,default")))
 double sum(const double* begin, const double* end){
   double total = 0.0;
   for (const double* iter = begin; iter != end; iter++)
@@ -28,10 +29,7 @@ double sum(const double* begin, const double* end){
 }
 
 double sum(const std::vector<double>& vals){
-  double total = 0.0;
-  for (auto iter = vals.begin(); iter != vals.end(); iter++)
-    total += *iter;
-  return total;
+  return sum(vals.data(), vals.data() + vals.size());
 }
 
 int sum(const std::vector<bool>& vals){
@@ -41,6 +39,7 @@ int sum(const std::vector<bool>& vals){
   return total;
 }
 
+__attribute__((target_clones("avx512f,avx2,sse4.2,default")))
 double log_sum_exp(const double* begin, const double* end){
   double max_val = *std::max_element(begin, end);
   double total   = 0.0;
@@ -94,14 +93,48 @@ double fast_log_sum_exp(double log_v1, double log_v2){
   }
 }
 
+// Sums fasterexp(*iter - max_val) over [begin, end), 4 elements at a time using
+// the SSE-vectorized vfasterexp() already vendored in fastonebigheader.h (previously
+// unused). Each lane's diff is computed in double precision and narrowed to float
+// immediately before the exp call, matching the scalar path's rounding exactly, so
+// this is not an approximation of the scalar loop -- it's the same computation batched.
+#ifdef __SSE2__
+static inline double fast_exp_sum(const double* begin, const double* end, double max_val){
+  const v4sf thresh = v4sfl((float) LOG_THRESH);
+  v4sf acc = v4sfl(0.0f);
+  const double* iter = begin;
+  for (; iter + 4 <= end; iter += 4){
+    float diffs[4] = { (float) (iter[0] - max_val), (float) (iter[1] - max_val),
+                        (float) (iter[2] - max_val), (float) (iter[3] - max_val) };
+    v4sf d    = _mm_loadu_ps(diffs);
+    v4sf mask = _mm_cmpgt_ps(d, thresh);
+    acc = acc + _mm_and_ps(mask, vfasterexp(d));
+  }
+  float lanes[4];
+  _mm_storeu_ps(lanes, acc);
+  double total = (double) lanes[0] + (double) lanes[1] + (double) lanes[2] + (double) lanes[3];
+  for (; iter != end; iter++){
+    double diff = *iter - max_val;
+    if (diff > LOG_THRESH)
+      total += fasterexp(diff);
+  }
+  return total;
+}
+#endif
+
+__attribute__((target_clones("avx512f,avx2,sse4.2,default")))
 double fast_log_sum_exp(const double* begin, const double* end){
   double max_val = *std::max_element(begin, end);
-  double total   = 0;
+#ifdef __SSE2__
+  double total = fast_exp_sum(begin, end, max_val);
+#else
+  double total = 0;
   for (const double* iter = begin; iter != end; iter++){
     double diff = *iter - max_val;
     if (diff > LOG_THRESH)
       total += fasterexp(diff);
   }
+#endif
   return max_val + fasterlog(total);
 }
 

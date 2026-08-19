@@ -13,7 +13,7 @@
 ## Default compilation flags.
 ## Override with:
 ##   make CXXFLAGS=XXXXX
-CXXFLAGS= -O3 -g -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
+CXXFLAGS= -O3 -g -flto=auto -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
 
 ## To create a static distribution file, run:
 ##   make static-dist
@@ -48,8 +48,14 @@ MIMALLOC_ROOT = lib/mimalloc
 # Target the static library produced by mimalloc's build system
 MIMALLOC_LIB  = $(MIMALLOC_ROOT)/build/libmimalloc.a
 
-LIBS = -L./ -lm -L$(HTSLIB_ROOT)/ -lz -lcurl -lcrypto -L$(CEPHES_ROOT)/ -llzma -lbz2 -Wl,--whole-archive $(MIMALLOC_LIB) -Wl,--no-whole-archive
-INCLUDE   = -Ilib -Ilib/htslib -Itaskflow -I$(MIMALLOC_ROOT)/include
+# Locally vendored libdeflate (CMake-only upstream build, no system package
+# required -- see lib/libdeflate/build). htslib's config.h defines
+# HAVE_LIBDEFLATE so bgzf.c etc. call into it instead of zlib for BGZF/gzip.
+LIBDEFLATE_ROOT = lib/libdeflate
+LIBDEFLATE_LIB  = $(LIBDEFLATE_ROOT)/build/libdeflate.a
+
+LIBS = -L./ -lm -L$(HTSLIB_ROOT)/ -lz -lcurl -lcrypto -L$(CEPHES_ROOT)/ -llzma -lbz2 $(LIBDEFLATE_LIB) -Wl,--whole-archive $(MIMALLOC_LIB) -Wl,--no-whole-archive
+INCLUDE   = -Ilib -Ilib/htslib -Itaskflow -I$(MIMALLOC_ROOT)/include -I$(LIBDEFLATE_ROOT)
 CEPHES_LIB        = lib/cephes/libprob.a
 HTSLIB_LIB        = $(HTSLIB_ROOT)/libhts.a
 
@@ -81,13 +87,38 @@ version:
 # PROFILE-GUIDED OPTIMIZATION (PGO)
 # ====================================================================
 # `make pgo` builds HipSTR twice: an instrumented pass trained on the
-# small bundled fixture in test/pgo/ (a ~400kb chr20 STR locus cluster
-# with matching FASTA slice and 12 subsetted BAMs), then a final pass
-# compiled against the resulting profile. This trains and rebuilds
-# locally on whatever machine runs `make pgo`, so the result is tuned
-# for that hardware rather than shipped as a prebuilt binary. The
-# profile is regenerated from the fixture on every `make pgo`, so it
-# can never go stale relative to the current source.
+# bundled fixture in test/pgo/ (a 1Mb chr20 slice with a matching FASTA,
+# 654 STR loci, and 13 subsetted BAMs -- the original 12-sample cluster
+# plus a 20%-downsampled real single-sample BAM covering the full 1Mb
+# span), then a final pass compiled against the resulting profile. This
+# trains and rebuilds locally on whatever machine runs `make pgo`, so
+# the result is tuned for that hardware rather than shipped as a
+# prebuilt binary. The profile is regenerated from the fixture on every
+# `make pgo`, so it can never go stale relative to the current source.
+#
+# The fixture was widened from an earlier 3-locus/~400kb version (whose
+# BAMs, it turned out, also had reads rebased into a fake local
+# coordinate frame that didn't match its own bundled SNP VCF -- the
+# --snp-vcf training pass was silently exercising zero SNPs). 654 real
+# chr20 loci across a real, coordinate-consistent coverage profile is a
+# small, git-friendly fixture (~9MB total) that's actually representative.
+# Override PGO_FASTA/PGO_BED/PGO_BAMS/PGO_SNP_VCF on the command line to
+# train against a larger or different workload, e.g.:
+#   make pgo PGO_FASTA=/path/ref.fa PGO_BED=/path/regions.bed \
+#            PGO_BAMS="/path/a.bam /path/b.bam"
+#
+# CAUTION -- measured on this GCC 11.4 toolchain: `make pgo` currently
+# ships a binary ~7% SLOWER than plain `make` on realistic multi-
+# thousand-region workloads, regardless of fixture quality (verified
+# with both the old 3-locus fixture and the new 654-locus one -- same
+# regression either way) and regardless of -flto-partition (tried
+# `=one` as well as the default). Isolating -flto from the comparison
+# shows PGO alone is roughly neutral (within run-to-run noise); it's
+# specifically the combination of -fprofile-use with -flto=auto in
+# CXXFLAGS above that regresses, i.e. an LTO+PGO codegen interaction on
+# this toolchain, not a training-data problem. Until that's resolved
+# (a newer GCC, or a flag combination that avoids it), plain `make` is
+# the faster build -- don't reach for `make pgo` by default here.
 #
 # -fprofile-update=atomic is required (not optional) because the
 # Taskflow worker pool updates profile counters from multiple threads
@@ -137,6 +168,7 @@ clean-all: clean
 	cd lib/htslib && $(MAKE) clean
 	rm -f lib/cephes/*.o $(CEPHES_LIB)
 	rm -rf $(MIMALLOC_ROOT)/build
+	rm -rf $(LIBDEFLATE_ROOT)/build
 	rm -rf pgo-data HipSTR.pgo-instrument
 
 # Include auto-generated header dependencies when present.
@@ -145,11 +177,11 @@ clean-all: clean
 # ====================================================================
 # 4. DEPENDENCY TRACKING: ENSURE HIPSTR REBUILDS IF MIMALLOC CHANGES
 # ====================================================================
-HipSTR: $(OBJ_COMMON) $(OBJ_HIPSTR) $(CEPHES_LIB) $(HTSLIB_LIB) $(MIMALLOC_LIB) $(OBJ_SEQALN)
-	$(CXX) $(LDFLAGS) $(CXXFLAGS) $(INCLUDE) -o $@ $(filter-out $(MIMALLOC_LIB),$^) $(LIBS)
+HipSTR: $(OBJ_COMMON) $(OBJ_HIPSTR) $(CEPHES_LIB) $(HTSLIB_LIB) $(MIMALLOC_LIB) $(LIBDEFLATE_LIB) $(OBJ_SEQALN)
+	$(CXX) $(LDFLAGS) $(CXXFLAGS) $(INCLUDE) -o $@ $(filter-out $(MIMALLOC_LIB) $(LIBDEFLATE_LIB),$^) $(LIBS)
 
-DenovoFinder: $(OBJ_DENOVO) $(HTSLIB_LIB) $(MIMALLOC_LIB)
-	$(CXX) $(LDFLAGS) $(CXXFLAGS) $(INCLUDE) -o $@ $(filter-out $(MIMALLOC_LIB),$^) $(LIBS)
+DenovoFinder: $(OBJ_DENOVO) $(HTSLIB_LIB) $(MIMALLOC_LIB) $(LIBDEFLATE_LIB)
+	$(CXX) $(LDFLAGS) $(CXXFLAGS) $(INCLUDE) -o $@ $(filter-out $(MIMALLOC_LIB) $(LIBDEFLATE_LIB),$^) $(LIBS)
 	
 PhasingChecker: src/check_phasing.cpp src/region.cpp src/error.cpp src/haplotype_tracker.cpp src/version.cpp src/pedigree.cpp src/vcf_reader.cpp src/stringops.cpp $(HTSLIB_LIB)
 	$(CXX) $(LDFLAGS) $(CXXFLAGS) $(INCLUDE) -o $@ $^ $(LIBS)
@@ -180,9 +212,18 @@ test/vcf_snp_tree_test: test/vcf_snp_tree_test.cpp src/error.cpp src/snp_tree.cp
 $(CEPHES_LIB):
 	cd lib/cephes && $(MAKE)
 
-# Rebuild htslib library if needed
-$(HTSLIB_LIB):
-	cd lib/htslib && $(MAKE)
+# Rebuild htslib library if needed. Needs libdeflate built first so its
+# header/lib are present for HAVE_LIBDEFLATE (see lib/htslib/config.h).
+$(HTSLIB_LIB): $(LIBDEFLATE_LIB)
+	cd lib/htslib && $(MAKE) lib-static CPPFLAGS="-I$(CURDIR)/$(LIBDEFLATE_ROOT)"
+
+# ====================================================================
+# 5b. THE BUILD RECIPE FOR LIBDEFLATE (vendored; CMake-only upstream build)
+# ====================================================================
+$(LIBDEFLATE_LIB):
+	mkdir -p $(LIBDEFLATE_ROOT)/build && cd $(LIBDEFLATE_ROOT)/build && \
+	cmake -DCMAKE_BUILD_TYPE=Release -DLIBDEFLATE_BUILD_SHARED_LIB=OFF -DLIBDEFLATE_BUILD_GZIP=OFF .. && \
+	$(MAKE) -j4
 
 # ====================================================================
 # 5. THE BUILD RECIPE FOR MIMALLOC (Handles Old System CMake Versions)
