@@ -144,26 +144,17 @@ void HapAligner::align_seq_to_hap(Haplotype* haplotype, bool reuse_alns,
 
 	
 	for (int j = 1; j < seq_len; ++j, ++matrix_index){
-	  const double from_insert =
-      insert_matrix[matrix_index - 1] + LOG_MATCH_TO_INS[homopolymer_len];
-    const double from_match =
-      match_matrix[matrix_index - seq_len - 1] + LOG_MATCH_TO_MATCH[homopolymer_len];
-    const double from_delete =
-      deletion_matrix[matrix_index - seq_len - 1] + LOG_MATCH_TO_DEL[homopolymer_len];
+	  const double from_insert   = insert_matrix[matrix_index - 1] + LOG_MATCH_TO_INS[homopolymer_len];
+	  const double from_match    = match_matrix[matrix_index - seq_len - 1] + LOG_MATCH_TO_MATCH[homopolymer_len];
+	  const double from_delete   = deletion_matrix[matrix_index - seq_len - 1] + LOG_MATCH_TO_DEL[homopolymer_len];
+	  const double match_emit    = (seq_0[j] == hap_char ? base_log_correct[j] : base_log_wrong[j]);
+	  match_matrix[matrix_index] = match_emit + std::max(from_insert, std::max(from_match, from_delete));
 
-    const double match_emit =
-      seq_0[j] == hap_char ? base_log_correct[j] : base_log_wrong[j];
-
-    match_matrix[matrix_index] =
-      match_emit + std::max(from_insert, std::max(from_match, from_delete));
-
-      
-	  
 	  insert_matrix[matrix_index]   = base_log_correct[j] + std::max(match_matrix[matrix_index-seq_len-1] + LOG_INS_TO_MATCH,
-									insert_matrix[matrix_index-1]         + LOG_INS_TO_INS);
+									   insert_matrix[matrix_index-1]         + LOG_INS_TO_INS);
 	  deletion_matrix[matrix_index] = std::max(match_matrix[matrix_index - seq_len] + LOG_DEL_TO_MATCH,
-           deletion_matrix[matrix_index - seq_len] + LOG_DEL_TO_DEL);
-	}	
+						    deletion_matrix[matrix_index - seq_len] + LOG_DEL_TO_DEL);
+	}
       }
     }
   }
