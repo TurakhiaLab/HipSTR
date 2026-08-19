@@ -6,6 +6,17 @@
 
 #include "fastonebigheader.h"
 
+// Lets GCC's vectorizer replace calls to exp() inside a "#pragma omp simd"
+// loop with calls to glibc's libmvec vector exp (_ZGVbN2v_exp/_ZGVdN4v_exp/
+// _ZGVeN8v_exp, selected per target_clones ISA clone below) instead of a
+// scalar loop. libmvec's vector exp is the same correctly-rounded algorithm
+// as scalar exp(), just batched -- this is not an approximation, unlike
+// fast_log_sum_exp's fasterexp() below. -fopenmp-simd (no full OpenMP
+// runtime/threading pulled in -- see LIBS' -lmvec) is required for the
+// pragma to take effect.
+#pragma omp declare simd notinbranch
+extern "C" double exp(double);
+
 const double LOG_ONE_HALF  = log(0.5);
 const double TOLERANCE     = 1e-10;
 const double LOG_E_BASE_10 = 0.4342944819;
@@ -43,8 +54,10 @@ __attribute__((target_clones("avx512f,avx2,sse4.2,default")))
 double log_sum_exp(const double* begin, const double* end){
   double max_val = *std::max_element(begin, end);
   double total   = 0.0;
-  for (const double* iter = begin; iter != end; iter++)
-    total += exp(*iter - max_val);
+  const long n   = end - begin;
+  #pragma omp simd reduction(+:total)
+  for (long i = 0; i < n; i++)
+    total += exp(begin[i] - max_val);
   return max_val + log(total);
 }
 
@@ -61,11 +74,7 @@ double log_sum_exp(double log_v1, double log_v2, double log_v3){
 }
 
 double log_sum_exp(const std::vector<double>& log_vals){
-  double max_val = *std::max_element(log_vals.begin(), log_vals.end());
-  double total   = 0;
-  for (auto iter = log_vals.begin(); iter != log_vals.end(); iter++)
-    total += exp(*iter - max_val);
-  return max_val + log(total);
+  return log_sum_exp(log_vals.data(), log_vals.data() + log_vals.size());
 }
 
 void update_streaming_log_sum_exp(double log_val, double& max_val, double& total){

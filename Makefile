@@ -13,7 +13,11 @@
 ## Default compilation flags.
 ## Override with:
 ##   make CXXFLAGS=XXXXX
-CXXFLAGS= -O3 -g -flto=auto -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
+## -fopenmp-simd only enables recognition of "#pragma omp simd"/"declare simd"
+## (used in mathops.cpp to vectorize log_sum_exp's reduction via libmvec's
+## correctly-rounded vector exp -- see LIBS' -lmvec below). It does not pull
+## in libgomp or any threading runtime; Taskflow remains the only threading.
+CXXFLAGS= -O3 -g -flto=auto -fopenmp-simd -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
 
 ## To create a static distribution file, run:
 ##   make static-dist
@@ -54,7 +58,7 @@ MIMALLOC_LIB  = $(MIMALLOC_ROOT)/build/libmimalloc.a
 LIBDEFLATE_ROOT = lib/libdeflate
 LIBDEFLATE_LIB  = $(LIBDEFLATE_ROOT)/build/libdeflate.a
 
-LIBS = -L./ -lm -L$(HTSLIB_ROOT)/ -lz -lcurl -lcrypto -L$(CEPHES_ROOT)/ -llzma -lbz2 $(LIBDEFLATE_LIB) -Wl,--whole-archive $(MIMALLOC_LIB) -Wl,--no-whole-archive
+LIBS = -L./ -lm -lmvec -L$(HTSLIB_ROOT)/ -lz -lcurl -lcrypto -L$(CEPHES_ROOT)/ -llzma -lbz2 $(LIBDEFLATE_LIB) -Wl,--whole-archive $(MIMALLOC_LIB) -Wl,--no-whole-archive
 INCLUDE   = -Ilib -Ilib/htslib -Itaskflow -I$(MIMALLOC_ROOT)/include -I$(LIBDEFLATE_ROOT)
 CEPHES_LIB        = lib/cephes/libprob.a
 HTSLIB_LIB        = $(HTSLIB_ROOT)/libhts.a
