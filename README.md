@@ -71,15 +71,11 @@ The command constructs an executable file called **HipSTR** in the current direc
 The Makefile now emits compiler dependency files with `-MMD -MP`, so header changes in `src`, `src/SeqAlignment`, and `src/denovos` trigger the required object rebuilds.
 
 ### Building with profile-guided optimization
-For deployment, build with PGO instead of a plain `make`:
-
     make pgo
 
-`make pgo` compiles an instrumented `HipSTR`, trains it against a small bundled fixture (`test/pgo/`: a real ~400kb chr20 STR locus cluster with matching FASTA and 12 subsetted sample BAMs derived from the tutorial dataset), then recompiles the final `HipSTR` using the resulting profile. Because training and both compiles happen locally, the binary is tuned for whatever machine ran `make pgo`, not a profile baked in on other hardware. The profile is regenerated from the fixture every time, so it never goes stale relative to the source. In benchmarking against the full tutorial dataset, this cuts wall time by roughly 8% with identical genotype output. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags.
+`make pgo` compiles an instrumented `HipSTR`, trains it against a bundled fixture (`test/pgo/`: a real ~1Mb chr20 STR locus cluster with matching FASTA and 13 subsetted sample BAMs), then recompiles the final `HipSTR` using the resulting profile. Training and both compiles happen locally, so the binary is tuned for whatever machine ran `make pgo` rather than shipping a profile baked in on other hardware. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags.
 
-One of the training passes also exercises the `--snp-vcf` physical-phasing path (`snp_bam_processor.cpp`, `snp_tree.cpp`, `haplotype_tracker.cpp`), using `test/pgo/pgo_fixture_snps.vcf.gz` at the fixture window, pulled from the 1000 Genomes Phase 3 call set (the tutorial BAMs' `SM` read-group tags identify them as the CEPH trio NA12878/NA12891/NA12892). Only NA12878 is covered.
-
-`make pgo` takes noticeably longer than a normal build (two full compiles plus training runs). For everyday development, keep using plain `make`.
+**Not currently recommended**: measured on GCC 11.4 and 13.1, `make pgo` produces a binary 5-7% *slower* than plain `make`, from an interaction between `-fprofile-use` and `-flto=auto`. See the Makefile's PGO section for details. Use plain `make` until that interaction is resolved.
 
 ## Quick Start
 To run HipSTR in its most broadly applicable mode, run it on **all samples concurrently** using the syntax:
@@ -127,6 +123,12 @@ Two pieces of the original single-threaded code held mutable state that's safe w
 - **`mathops.cpp`** adds a pointer-pair overload of `fast_log_sum_exp` (`const double* begin, const double* end`) alongside the original `vector<double>` one, avoiding a vector copy at a couple of call sites.
 - **mimalloc** is linked in by default (see Installation) to cut allocator overhead from the volume of small per-read/per-locus allocations.
 - **chromosome cache** is used to share chromosomes across threads. Since the program uses the chromosomes in order, when a chromosome is no longer in use due to all threads migrating to the next one, it is removed from the shared cache, reducing memory footprint.
+
+### Vectorization
+- **`-flto=auto`** enables link-time optimization across all translation units (~7-8% faster in benchmarking, identical output).
+- **`mathops.cpp`'s `sum`/`log_sum_exp`/`fast_log_sum_exp`** are compiled with `__attribute__((target_clones("avx512f,avx2,sse4.2,default")))`, which builds one copy per listed ISA and dispatches to the best one the CPU supports at runtime. This is portable across machines (unlike `-march=native`, which isn't used anywhere in this build) and requires no user configuration.
+- **`log_sum_exp`**'s `exp()` reduction is vectorized via glibc's libmvec (correctly-rounded, not an approximation) using `#pragma omp simd` and `-fopenmp-simd`, which pulls in no OpenMP runtime.
+- **`fast_log_sum_exp`** batches 4 elements at a time using `vfasterexp()`, an SSE-vectorized helper already vendored in `fastonebigheader.h` but previously unused.
 
 ### Dependency and I/O fixes
 - **htslib upgraded 1.9 → 1.24.** The vendored 1.9 copy's `fai_retrieve()` read FASTA sequence one byte at a time (`bgzf_getc()` plus a locale-aware `isgraph()` check per byte). Since chromosome loading runs in the pipeline's mandatory serial stage, this cost didn't shrink with more worker threads — on the tutorial dataset it was ~66% of the wall-clock floor at high thread counts. 1.24 pulls in upstream's already-fixed block-read implementation instead of a local patch: total FASTA load time across chr1–22 dropped from 7.17s to 1.36s, and wall time at `--threads 24` dropped from ~10.85s to ~5.5–6.7s. Picking up the newer vendored source needed two small C++-compatibility fixes: an explicit cast in `cram/cram_io.h` (implicit `void*` conversion is valid C, not C++) and a missing `<unistd.h>` include in `bam_io.h`/`denovo_main.cpp` for `access()`/`F_OK`, both previously masked by htslib 1.9's transitive includes.
@@ -228,6 +230,7 @@ The highest-value internal optimizations in this fork are:
 3. Haplotype-alignment DP matrices are reused inside each `HapAligner`, avoiding millions of repeated allocations in the read-alignment hot path.
 4. mimalloc is linked by default to reduce allocator overhead that remains in read and haplotype processing.
 5. htslib 1.24 replaces a byte-at-a-time FASTA reader that ran in the pipeline's serial stage with a block-read implementation, removing a bottleneck that had capped scaling at higher thread counts (see [Dependency and I/O fixes](#dependency-and-io-fixes)).
+6. Link-time optimization and portable runtime CPU dispatch (see [Vectorization](#vectorization)) speed up the numeric hot path without requiring `-march=native` or any per-machine tuning.
 
 For larger runs, start with `--threads` near the number of physical cores available to the job and benchmark a small representative region set. If the run is still I/O-bound or SNP-phasing-bound, splitting by chromosome with `--chrom` remains useful for distributing work across multiple jobs.
 

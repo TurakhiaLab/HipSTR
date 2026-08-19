@@ -6,17 +6,17 @@
 ## make clean-all
 ## make -j4
 ##
-## For a build tuned with profile-guided optimization (recommended for
-## production/deployment on the target machine):
-## make pgo
+## `make pgo` is also available (see the PGO section below) but is currently
+## measured slower than a plain build on this toolchain -- not recommended.
 
 ## Default compilation flags.
 ## Override with:
 ##   make CXXFLAGS=XXXXX
-## -fopenmp-simd only enables recognition of "#pragma omp simd"/"declare simd"
-## (used in mathops.cpp to vectorize log_sum_exp's reduction via libmvec's
-## correctly-rounded vector exp -- see LIBS' -lmvec below). It does not pull
-## in libgomp or any threading runtime; Taskflow remains the only threading.
+## -flto=auto enables link-time optimization across all translation units.
+## -fopenmp-simd enables recognition of "#pragma omp simd"/"declare simd"
+## (mathops.cpp uses it to vectorize log_sum_exp's reduction via libmvec's
+## vector exp -- see -lmvec below). It does not pull in libgomp or any
+## OpenMP runtime; Taskflow remains the only threading in this codebase.
 CXXFLAGS= -O3 -g -flto=auto -fopenmp-simd -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
 
 ## To create a static distribution file, run:
@@ -92,43 +92,26 @@ version:
 # PROFILE-GUIDED OPTIMIZATION (PGO)
 # ====================================================================
 # `make pgo` builds HipSTR twice: an instrumented pass trained on the
-# bundled fixture in test/pgo/ (a 1Mb chr20 slice with a matching FASTA,
-# 654 STR loci, and 13 subsetted BAMs -- the original 12-sample cluster
-# plus a 20%-downsampled real single-sample BAM covering the full 1Mb
-# span), then a final pass compiled against the resulting profile. This
-# trains and rebuilds locally on whatever machine runs `make pgo`, so
-# the result is tuned for that hardware rather than shipped as a
-# prebuilt binary. The profile is regenerated from the fixture on every
-# `make pgo`, so it can never go stale relative to the current source.
-#
-# The fixture was widened from an earlier 3-locus/~400kb version (whose
-# BAMs, it turned out, also had reads rebased into a fake local
-# coordinate frame that didn't match its own bundled SNP VCF -- the
-# --snp-vcf training pass was silently exercising zero SNPs). 654 real
-# chr20 loci across a real, coordinate-consistent coverage profile is a
-# small, git-friendly fixture (~9MB total) that's actually representative.
-# Override PGO_FASTA/PGO_BED/PGO_BAMS/PGO_SNP_VCF on the command line to
-# train against a larger or different workload, e.g.:
+# bundled fixture in test/pgo/ (a real 1Mb chr20 slice, 654 STR loci, 13
+# subsetted BAMs), then a final pass compiled against the resulting
+# profile. Training and both compiles run locally, so the result is
+# tuned for whatever machine ran `make pgo` rather than shipped as a
+# prebuilt binary, and the profile can't go stale relative to the source.
+# Override PGO_FASTA/PGO_BED/PGO_BAMS/PGO_SNP_VCF to train against a
+# different workload, e.g.:
 #   make pgo PGO_FASTA=/path/ref.fa PGO_BED=/path/regions.bed \
 #            PGO_BAMS="/path/a.bam /path/b.bam"
 #
-# CAUTION -- measured on this GCC 11.4 toolchain: `make pgo` currently
-# ships a binary ~7% SLOWER than plain `make` on realistic multi-
-# thousand-region workloads, regardless of fixture quality (verified
-# with both the old 3-locus fixture and the new 654-locus one -- same
-# regression either way) and regardless of -flto-partition (tried
-# `=one` as well as the default). Isolating -flto from the comparison
-# shows PGO alone is roughly neutral (within run-to-run noise); it's
-# specifically the combination of -fprofile-use with -flto=auto in
-# CXXFLAGS above that regresses, i.e. an LTO+PGO codegen interaction on
-# this toolchain, not a training-data problem. Until that's resolved
-# (a newer GCC, or a flag combination that avoids it), plain `make` is
-# the faster build -- don't reach for `make pgo` by default here.
+# CAUTION -- measured on GCC 11.4 and 13.1: `make pgo` currently ships a
+# binary ~5-7% SLOWER than a plain build on multi-thousand-region
+# workloads. Isolating -flto from the comparison shows PGO alone is
+# roughly neutral; the regression is specific to combining -fprofile-use
+# with -flto=auto in CXXFLAGS above. Until that toolchain interaction is
+# resolved, plain `make` is the faster build.
 #
-# -fprofile-update=atomic is required (not optional) because the
-# Taskflow worker pool updates profile counters from multiple threads
-# concurrently during the instrumented training run; without it,
-# counters can be corrupted by races between workers.
+# -fprofile-update=atomic is required: the Taskflow worker pool updates
+# profile counters from multiple threads during the instrumented
+# training run, and counters would otherwise race.
 PGO_DIR       = pgo-data
 PGO_FASTA     = test/pgo/pgo_fixture.fa
 PGO_BED       = test/pgo/pgo_fixture.bed

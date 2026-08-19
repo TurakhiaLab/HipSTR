@@ -6,14 +6,11 @@
 
 #include "fastonebigheader.h"
 
-// Lets GCC's vectorizer replace calls to exp() inside a "#pragma omp simd"
-// loop with calls to glibc's libmvec vector exp (_ZGVbN2v_exp/_ZGVdN4v_exp/
-// _ZGVeN8v_exp, selected per target_clones ISA clone below) instead of a
-// scalar loop. libmvec's vector exp is the same correctly-rounded algorithm
-// as scalar exp(), just batched -- this is not an approximation, unlike
-// fast_log_sum_exp's fasterexp() below. -fopenmp-simd (no full OpenMP
-// runtime/threading pulled in -- see LIBS' -lmvec) is required for the
-// pragma to take effect.
+// Lets GCC's vectorizer replace exp() calls inside a "#pragma omp simd" loop
+// with glibc's libmvec vector exp instead of a scalar loop. This is the same
+// correctly-rounded algorithm as scalar exp(), just batched -- not an
+// approximation, unlike fast_log_sum_exp's fasterexp() below. Requires
+// -fopenmp-simd (Makefile) and -lmvec (LIBS); pulls in no OpenMP runtime.
 #pragma omp declare simd notinbranch
 extern "C" double exp(double);
 
