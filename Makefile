@@ -215,7 +215,7 @@ $(CEPHES_LIB):
 # Rebuild htslib library if needed. Needs libdeflate built first so its
 # header/lib are present for HAVE_LIBDEFLATE (see lib/htslib/config.h).
 $(HTSLIB_LIB): $(LIBDEFLATE_LIB)
-	cd lib/htslib && $(MAKE) lib-static CPPFLAGS="-I$(CURDIR)/$(LIBDEFLATE_ROOT)"
+	cd lib/htslib && $(MAKE) lib-static CPPFLAGS="-I$(CURDIR)/$(LIBDEFLATE_ROOT) -DHAVE_LIBDEFLATE"
 
 # ====================================================================
 # 5b. THE BUILD RECIPE FOR LIBDEFLATE (vendored; CMake-only upstream build)
