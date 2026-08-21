@@ -28,7 +28,12 @@ void precompute_integer_logs(){
 
 double int_log(int val){ return INT_LOGS[val]; }
 
+// -ffp-contract=off keeps every target_clones ISA variant numerically
+// identical (no FMA fusion pulled in by -mavx512f/-mavx2 that isn't also
+// present in the default clone) -- see fast_log_sum_exp below for the
+// concrete case this was needed for.
 __attribute__((target_clones("avx512f,avx2,sse4.2,default")))
+__attribute__((optimize("-ffp-contract=off")))
 double sum(const double* begin, const double* end){
   double total = 0.0;
   for (const double* iter = begin; iter != end; iter++)
@@ -48,6 +53,7 @@ int sum(const std::vector<bool>& vals){
 }
 
 __attribute__((target_clones("avx512f,avx2,sse4.2,default")))
+__attribute__((optimize("-ffp-contract=off")))
 double log_sum_exp(const double* begin, const double* end){
   double max_val = *std::max_element(begin, end);
   double total   = 0.0;
@@ -104,16 +110,25 @@ double fast_log_sum_exp(double log_v1, double log_v2){
 // unused). Each lane's diff is computed in double precision and narrowed to float
 // immediately before the exp call, matching the scalar path's rounding exactly, so
 // this is not an approximation of the scalar loop -- it's the same computation batched.
+//
+// The >LOG_THRESH decision is made in double precision, from the same ddiffN
+// values used for the scalar tail below -- comparing the float-narrowed diff
+// instead (as an earlier version of this did) can flip right at the boundary,
+// since a diff just above LOG_THRESH in double can round to float and land at
+// or below the float-narrowed threshold, silently dropping that term.
 #ifdef __SSE2__
+__attribute__((optimize("-ffp-contract=off")))
 static inline double fast_exp_sum(const double* begin, const double* end, double max_val){
-  const v4sf thresh = v4sfl((float) LOG_THRESH);
   v4sf acc = v4sfl(0.0f);
   const double* iter = begin;
   for (; iter + 4 <= end; iter += 4){
-    float diffs[4] = { (float) (iter[0] - max_val), (float) (iter[1] - max_val),
-                        (float) (iter[2] - max_val), (float) (iter[3] - max_val) };
+    double ddiff0 = iter[0] - max_val, ddiff1 = iter[1] - max_val;
+    double ddiff2 = iter[2] - max_val, ddiff3 = iter[3] - max_val;
+    float diffs[4] = { (float) ddiff0, (float) ddiff1, (float) ddiff2, (float) ddiff3 };
+    unsigned int mbits[4] = { ddiff0 > LOG_THRESH ? 0xFFFFFFFFu : 0u, ddiff1 > LOG_THRESH ? 0xFFFFFFFFu : 0u,
+                               ddiff2 > LOG_THRESH ? 0xFFFFFFFFu : 0u, ddiff3 > LOG_THRESH ? 0xFFFFFFFFu : 0u };
     v4sf d    = _mm_loadu_ps(diffs);
-    v4sf mask = _mm_cmpgt_ps(d, thresh);
+    v4sf mask = _mm_loadu_ps((const float*) mbits);
     acc = acc + _mm_and_ps(mask, vfasterexp(d));
   }
   float lanes[4];
@@ -128,7 +143,15 @@ static inline double fast_exp_sum(const double* begin, const double* end, double
 }
 #endif
 
+// -ffp-contract=off: without it, the avx512f/avx2 clones let the compiler
+// fuse multiply-adds inside this function (including in inlined callees
+// like fasterexp()/vfasterexp()) that the default clone doesn't, so the
+// SAME source can round differently depending on which ISA clone the CPU
+// dispatches to at runtime -- confirmed by bisection to flip a stutter-block
+// candidate's log-probability at a couple of homopolymer STR loci out of
+// 1.5M genome-wide, changing which alleles get discovered as candidates.
 __attribute__((target_clones("avx512f,avx2,sse4.2,default")))
+__attribute__((optimize("-ffp-contract=off")))
 double fast_log_sum_exp(const double* begin, const double* end){
   double max_val = *std::max_element(begin, end);
 #ifdef __SSE2__
