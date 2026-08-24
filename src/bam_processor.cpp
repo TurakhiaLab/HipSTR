@@ -689,12 +689,11 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   // Add the chromosome information to the VCF
   init_output_vcf(fasta_file, chroms, full_command);
 
-  // Keep two in-flight pipeline lines per worker, while --threads controls
+  // Keep four in-flight pipeline lines per worker, while --threads controls
   // the actual executor worker count.
   size_t worker_threads = std::max<size_t>(1, NUM_THREADS);
-  // At worker_threads == 1, extra lines can't add concurrency (only one
-  // pipe stage can ever execute at a time regardless of queue depth) -- they
-  // just multiply readers/trimmers and work-item/result slots for no benefit.
+  // At worker_threads == 1, extra lines can't add concurrency and more pipelines
+  // caused more overhead
   size_t pipeline_lines = (worker_threads == 1) ? 1 : 4*worker_threads;
   tf::Executor executor(worker_threads);
   tf::Taskflow taskflow;
@@ -731,11 +730,7 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   // Load each chromosome sequence once and share the stable string storage with
   // all pipeline lines. Only ever called from the SERIAL stage 0 pipe below, so
   // no locking is needed -- Taskflow guarantees that pipe runs on one line at a
-  // time. (Previously guarded by a std::shared_mutex taken from the PARALLEL
-  // stage on every region; with a chromosome-sorted region file, every worker
-  // line hit the same cache entry continuously, and the rwlock's shared atomic
-  // state bouncing across cores/NUMA nodes at 64-way concurrency dominated the
-  // profile -- more sampled time than the actual alignment work.)
+  // time. 
   // Bounded at MAX_CACHED_CHROMS entries: with a chromosome-sorted region
   // file, only the current chromosome (plus one grace slot for lines still
   // finishing regions on the previous one) is ever needed. Values are
@@ -773,8 +768,8 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
 
   tf::Pipeline pipeline(
     pipeline_lines,
-    // STAGE 0: Taskflow requires the first pipe to be serial. Keep this pipe
-    // tiny; it only creates a token for the next region.
+    // STAGE 0: Taskflow requires the first pipe to be serial
+    // assign tokens to regions + pull in chromosome to cache
     tf::Pipe{tf::PipeType::SERIAL, [&](tf::Pipeflow& pf) {
       work_items[pf.line()].reset();
       results[pf.line()].reset();
@@ -817,8 +812,8 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
       }
 
       // Raw pointer is safe here: item (and its chrom_seq shared_ptr) stays
-      // alive for the rest of this pipe -- work_items[pf.line()] isn't reset
-      // until after every use of chrom_seq below.
+      // alive for the rest of this pipe 
+      // work_items[pf.line()] isn't reset until after every use of chrom_seq below.
       const std::string* chrom_seq = item.chrom_seq.get();
 
       if (region.start() < 50 || region.stop()+50 >= chrom_seq->size()){
