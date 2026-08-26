@@ -42,20 +42,23 @@ Despite their utility, STRs are particularly difficult to genotype. The repetiti
 In our opinion, all of these factors make **HipSTR-MT** the most reliable tool for genotyping STRs from **Illumina** sequencing data.
 
 ## Requirements
-HipSTR-MT keeps the original HipSTR runtime requirements and adds a modern C++ compiler for Taskflow:
 
-- make
-- g++ with C++20 support
-- zlib
-- libhts
-- libbz2
-- liblzma
-- libcurl and OpenSSL (dev headers) — vendored htslib 1.24's default build config always compiles in libcurl-backed remote-file support
-- CMake 3.18+ for building the vendored mimalloc and libdeflate (both CMake-only upstream builds); a portable CMake is downloaded automatically if the system one is too old or missing
+- **Operating system: Linux (x86_64)**. Memory-usage reporting reads `/proc/self/status` and CPU-affinity detection uses `sched_getaffinity`, both Linux-only APIs with no fallback implementation; this has never built or run on macOS/BSD/Windows, including the unmodified upstream HipSTR this fork is based on.
+- **make**
+- **g++ with C++20 support** — needed for Taskflow, the task-based parallelization library this fork adds
+- **CMake 3.18+** — needed to build the vendored mimalloc and libdeflate (both CMake-only upstream build systems); if the system CMake is missing or older than 3.18, the Makefile downloads a portable one automatically
+- **zlib** (dev headers)
+- **libbz2** (dev headers)
+- **liblzma** (dev headers)
+- **libcurl and OpenSSL** (dev headers) — vendored htslib 1.24's default build config always compiles in libcurl-backed remote-file support
 
-On Ubuntu 16+ systems, the system packages can be installed with:
+HTSlib itself is vendored and built from source in `lib/htslib` (like mimalloc, libdeflate, and Taskflow, all vendored under `lib/`), so no system `libhts`/`htslib` package is needed or used.
 
-    apt install make g++ zlib1g-dev libhts-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev cmake
+On Ubuntu/Debian, every package above (other than make/g++, which are usually already present) can be installed with:
+
+    apt install make g++ cmake zlib1g-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev
+
+This is the exact command the CI workflow ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs before every build, so it's kept in sync with what this project actually needs to compile.
 
 ## Installation
 Taskflow's headers and mimalloc's build-relevant source are vendored directly in this repo (the same way `lib/htslib` already is) rather than pulled in as git submodules, so a plain clone is all you need — no `--recurse-submodules`, no `git submodule update --init --recursive` to remember:
@@ -79,6 +82,9 @@ The Makefile now emits compiler dependency files with `-MMD -MP`, so header chan
 `make pgo` compiles an instrumented `HipSTR-MT`, trains it against a bundled fixture (`test/pgo/`: a real ~1Mb chr20 STR locus cluster, 654 loci, with matching FASTA and 2 subsetted sample BAMs), then recompiles the final `HipSTR-MT` using the resulting profile. Training and both compiles happen locally, so the binary is tuned for whatever machine ran `make pgo` rather than shipping a profile baked in on other hardware. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags. This same fixture also backs the correctness regression check -- see [Testing](#testing).
 
 **Not currently recommended**: measured on GCC 11.4 and 13.1, `make pgo` produces a binary 5-7% *slower* than plain `make`, from an interaction between `-fprofile-use` and `-flto=auto`. See the Makefile's PGO section for details. Use plain `make` until that interaction is resolved.
+
+### Conda/Bioconda
+A draft recipe lives in [recipe/](recipe/meta.yaml) for eventual submission to [bioconda-recipes](https://github.com/bioconda/bioconda-recipes). It isn't submitted yet -- Bioconda requires a pinned, immutable source tarball (a GitHub release/tag), and this repo doesn't have one cut yet. Until then, build from source as above.
 
 ## Testing
     test/run_tests.sh

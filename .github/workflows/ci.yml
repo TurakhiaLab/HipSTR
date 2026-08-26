@@ -14,10 +14,12 @@ jobs:
 
       # Matches README.md's "Requirements" section exactly, so a CI failure
       # here means the documented install instructions are themselves wrong.
+      # Note: no libhts-dev -- htslib is vendored and built from source from
+      # lib/htslib, so a system htslib package is never used (see README).
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y make g++ zlib1g-dev libhts-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev cmake
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y make g++ cmake zlib1g-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev
 
       - name: Build (plain make, not PGO -- see Makefile's PGO section)
         run: make -j"$(nproc)"
