@@ -2,16 +2,18 @@
 **H**aplotype **i**nference and **p**hasing for **S**hort **T**andem **R**epeats  
 ![HipSTR icon!](https://raw.githubusercontent.com/tfwillems/HipSTR/master/img/HipSTR_icon_small.png)
 
-#### Author: Thomas Willems <hipstrtool@gmail.com> <br> License: GNU v2
+#### Author: Thomas Willems <hipstrtool@gmail.com>
 
-#### Optimizer: Joachim Galil <joachimbgalil@gmail.com> <br> License: GNU v2
+#### Optimizer: Joachim Galil <joachimbgalil@gmail.com>, Turakhia Lab -- this fork's performance work was done at the Gymrek Lab's request
+
+#### License: GNU v2
 
 [Introduction](#introduction)  
 [Requirements](#requirements)  
 [Installation](#installation)  
 [Testing](#testing)  
 [Quick Start](#quick-start)       
-[HipSTR-MT Changes](#HipSTR-MT-changes)  
+[HipSTR-MT Changes](#hipstr-mt-changes)  
 [Tutorial](#tutorial)  
 [In-depth Usage](#in-depth-usage)  
 [Data Requirements](#data-requirements)  
@@ -529,10 +531,17 @@ If you're having trouble getting your analysis up and running:
     ii.  Type ./HipSTR-MT --help for details about each command line option
     iii. Email us at hipstrtool@gmail.com
 
-If you encounter a bug/issue or have a feature request:     
+If you encounter a bug/issue or have a feature request specific to this fork (parallelization, build, performance, etc.):
+
+     i.  File an issue on GitHub (https://github.com/TurakhiaLab/HipSTR-MT)
+
+For questions about the underlying genotyping model/algorithm itself, shared with the original HipSTR:
 
      i.  File an issue on GitHub (https://github.com/tfwillems/HipSTR)
     ii. Email us at hipstrtool@gmail.com
 
 ## Citation
-If you found HipSTR useful, we would appreciate it if you could cite our manuscript describing HipSTR and its applications: **[Genome-wide profiling of heritable and de novo STR variations](https://www.nature.com/articles/nmeth.4267)**
+If you found HipSTR-MT useful, please cite both:
+
+- The original HipSTR manuscript: **[Genome-wide profiling of heritable and de novo STR variations](https://www.nature.com/articles/nmeth.4267)**
+- This fork's Journal of Open Source Software (JOSS) paper, describing the parallelization and performance work: citation and DOI to be added here once it's published. Until then, please cite this repository directly: https://github.com/TurakhiaLab/HipSTR-MT

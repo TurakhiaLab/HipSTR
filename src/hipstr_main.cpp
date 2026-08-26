@@ -167,8 +167,9 @@ void print_usage(int def_mdist, int def_min_reads, int def_max_reads, int def_ma
 	    << "\t i.  An in-depth description of HipSTR is available at https://hipstr-tool.github.io/HipSTR"  << "\n"
 	    << "\t ii. Check out the HipSTR tutorial at https://hipstr-tool.github.io/HipSTR-tutorial"          << "\n\n"
 	    << "*** Found a bug/issue or have a feature request? ***"                                           << "\n"
-	    << "\t i.  File an issue on GitHub (https://github.com/tfwillems/HipSTR)"                           << "\n"
-	    << "\t ii. Email us at hipstrtool@gmail.com" << "\n"                                                << "\n" << std::endl;
+	    << "\t i.  For this fork (parallelization, build, performance): https://github.com/TurakhiaLab/HipSTR-MT" << "\n"
+	    << "\t ii. For the underlying genotyping model: https://github.com/tfwillems/HipSTR"                << "\n"
+	    << "\t iii. Email us at hipstrtool@gmail.com" << "\n"                                                << "\n" << std::endl;
 }
   
 void parse_command_line_args(int argc, char** argv, 
