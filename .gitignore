@@ -1,5 +1,5 @@
 DenovoFinder
-HipSTR
+HipSTR-MT
 PhasingChecker
 src/version.cpp
 test/allele_expansion_test
@@ -26,7 +26,7 @@ src/denovos/*.d
 src/denovos/*~
 *.dSYM
 pgo-data/
-HipSTR.pgo-instrument
+HipSTR-MT.pgo-instrument
 lib/mimalloc/build/
 lib/mimalloc/cmake_local/
 lib/libdeflate/build/

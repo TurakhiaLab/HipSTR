@@ -80,7 +80,7 @@ int default_thread_count(){
 }
 
 void print_usage(int def_mdist, int def_min_reads, int def_max_reads, int def_max_str_len, int def_max_haplotypes, int def_max_flanks, double def_min_flank_freq){
-  std::cerr << "Usage: HipSTR --bams <list_of_bams> --fasta <genome.fa> --regions <region_file.bed> --str-vcf <str_gts.vcf.gz> [OPTIONS]" << "\n" << "\n"
+  std::cerr << "Usage: HipSTR-MT --bams <list_of_bams> --fasta <genome.fa> --regions <region_file.bed> --str-vcf <str_gts.vcf.gz> [OPTIONS]" << "\n" << "\n"
     
 	    << "Required parameters:" << "\n"
 	    << "\t" << "--bams          <list_of_bams>        "  << "\t" << "Comma separated list of BAM/CRAM files. Either --bams or --bam-files must be specified"   << "\n"
@@ -143,7 +143,7 @@ void print_usage(int def_mdist, int def_min_reads, int def_max_reads, int def_ma
 
 	    << "Other optional parameters:" << "\n"
 	    << "\t" << "--help                                "  << "\t" << "Print this help message and exit"                                                     << "\n"
-	    << "\t" << "--version                             "  << "\t" << "Print HipSTR version and exit"                                                        << "\n"
+	    << "\t" << "--version                             "  << "\t" << "Print HipSTR-MT version and exit"                                                        << "\n"
 	    << "\t" << "--quiet                               "  << "\t" << "Only output terse logging messages (Default = output all messages)"                   << "\n"
 		    << "\t" << "--silent                              "  << "\t" << "Don't output any logging messages  (Default = output all messages)"                   << "\n"
 	    << "\t" << "--threads            <num_threads>    "  << "\t" << "Number of Taskflow executor worker threads to use (Default = auto)"                  << "\n"
@@ -392,12 +392,12 @@ void parse_command_line_args(int argc, char** argv,
     msg << "Did not recognize the following command line arguments:" << "\n";
     while (optind < argc)
       msg << "\t" << argv[optind++] << "\n";
-    msg << "Please check your command line syntax or type ./HipSTR --help for additional information" << "\n";
+    msg << "Please check your command line syntax or type ./HipSTR-MT --help for additional information" << "\n";
     printErrorAndDie(msg.str());
   }
 
   if (print_version == 1){
-    std::cerr << "HipSTR version " << VERSION << std::endl;
+    std::cerr << "HipSTR-MT version " << VERSION << std::endl;
     exit(0);
   }
   if (print_help){
@@ -421,7 +421,7 @@ int main(int argc, char** argv){
   precompute_integer_logs(); // Calculate and cache log of integers from 1 -> 999
 
   std::stringstream full_command_ss;
-  full_command_ss << "HipSTR-" << VERSION;
+  full_command_ss << "HipSTR-MT-" << VERSION;
   for (int i = 1; i < argc; i++)
     full_command_ss << " " << argv[i];
   std::string full_command = full_command_ss.str();
@@ -562,7 +562,7 @@ std::string rg_library = (bam_lib_from_samp == 0 ? rg_iter->GetTag(lib_field) : 
 
     // Check that tabix index exists
     if (!file_exists(ref_vcf_file + ".tbi"))
-	printErrorAndDie("No .tbi index found for the ref VCF file. Please index using tabix and rerun HipSTR");
+	printErrorAndDie("No .tbi index found for the ref VCF file. Please index using tabix and rerun HipSTR-MT");
 
     bam_processor.set_ref_vcf(ref_vcf_file);
   }
@@ -577,7 +577,7 @@ std::string rg_library = (bam_lib_from_samp == 0 ? rg_iter->GetTag(lib_field) : 
 
     // Check that tabix index exists
     if (!file_exists(snp_vcf_file + ".tbi"))
-	printErrorAndDie("No .tbi index found for the SNP VCF file. Please index using tabix and rerun HipSTR");
+	printErrorAndDie("No .tbi index found for the SNP VCF file. Please index using tabix and rerun HipSTR-MT");
 
     bam_processor.set_input_snp_vcf(snp_vcf_file);
   }
@@ -635,7 +635,7 @@ std::string rg_library = (bam_lib_from_samp == 0 ? rg_iter->GetTag(lib_field) : 
 
 
   total_time = (clock() - total_time)/CLOCKS_PER_SEC;
-  bam_processor.full_logger() << "HipSTR execution finished: Total runtime = " << total_time << " sec" << "\n"
+  bam_processor.full_logger() << "HipSTR-MT execution finished: Total runtime = " << total_time << " sec" << "\n"
 			      << "-----------------\n\n" << std::endl;
   return 0;  
 }

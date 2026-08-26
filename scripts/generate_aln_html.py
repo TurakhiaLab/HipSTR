@@ -1,4 +1,4 @@
-# Simple class that processes HTML files created by HipSTR
+# Simple class that processes HTML files created by HipSTR-MT
 # and removes any alignment positions in which all bases correspond
 # to an insertion
 # Useful when filtering HTML files for a subset of samples and insertions

@@ -215,7 +215,7 @@ static inline cram_block *cram_get_block_by_id(cram_slice *slice, int id) {
 /* Make block exactly 'l' bytes long */
 static inline int block_resize_exact(cram_block *b, size_t len) {
     /* Explicit cast: implicit void* conversion is valid C, not C++, and this
-       header is included directly into HipSTR's C++ translation units. */
+       header is included directly into HipSTR-MT's C++ translation units. */
     unsigned char *tmp = (unsigned char *) realloc(b->data, len);
     if (!tmp)
         return -1;

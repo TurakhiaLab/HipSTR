@@ -68,18 +68,18 @@ HTSLIB_LIB        = $(HTSLIB_ROOT)/libhts.a
 # 2. MAIN BUILD TARGETS
 # ====================================================================
 .PHONY: all
-all: $(MIMALLOC_LIB) HipSTR DenovoFinder test/fast_ops_test test/haplotype_test test/read_vcf_alleles_test test/snp_tree_test test/vcf_snp_tree_test
+all: $(MIMALLOC_LIB) HipSTR-MT DenovoFinder test/fast_ops_test test/haplotype_test test/read_vcf_alleles_test test/snp_tree_test test/vcf_snp_tree_test
 
 # Create a tarball with static binaries
 .PHONY: static-dist
 static-dist:
-	rm -f HipSTR
+	rm -f HipSTR-MT
 	$(MAKE) STATIC=1
 	( VER="$$(git describe --abbrev=7 --dirty --always --tags)" ;\
-	  DST="HipSTR-$${VER}-static-$$(uname -s)-$$(uname -m)" ; \
+	  DST="HipSTR-MT-$${VER}-static-$$(uname -s)-$$(uname -m)" ; \
 	  mkdir "$${DST}" && \
 	        mkdir "$${DST}/scripts" && \
-	        cp HipSTR VizAln VizAlnPdf README.md "$${DST}" && \
+	        cp HipSTR-MT VizAln VizAlnPdf README.md "$${DST}" && \
 	        cp scripts/filter_haploid_vcf.py scripts/filter_vcf.py scripts/generate_aln_html.py scripts/html_alns_to_pdf.py "$${DST}/scripts" && \
 	        tar -czvf "$${DST}.tar.gz" "$${DST}" && \
 	        rm -r "$${DST}/" \
@@ -91,7 +91,7 @@ version:
 # ====================================================================
 # PROFILE-GUIDED OPTIMIZATION (PGO)
 # ====================================================================
-# `make pgo` builds HipSTR twice: an instrumented pass trained on the
+# `make pgo` builds HipSTR-MT twice: an instrumented pass trained on the
 # bundled fixture in test/pgo/ (a real 1Mb chr20 slice, 654 STR loci, 13
 # subsetted BAMs), then a final pass compiled against the resulting
 # profile. Training and both compiles run locally, so the result is
@@ -128,25 +128,25 @@ pgo:
 	rm -rf $(PGO_DIR)
 	mkdir -p $(PGO_DIR)
 	$(MAKE) clean
-	$(MAKE) HipSTR CXXFLAGS="$(CXXFLAGS) -fprofile-generate=$(CURDIR)/$(PGO_DIR) -fprofile-update=atomic"
-	mv HipSTR HipSTR.pgo-instrument
-	./HipSTR.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --threads 1 --min-reads 10
-	./HipSTR.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --threads 4 --min-reads 10
-	./HipSTR.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --threads $(shell nproc) --min-reads 10
-	./HipSTR.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --snp-vcf $(PGO_SNP_VCF) --threads 4 --min-reads 10
-	rm -f HipSTR.pgo-instrument
+	$(MAKE) HipSTR-MT CXXFLAGS="$(CXXFLAGS) -fprofile-generate=$(CURDIR)/$(PGO_DIR) -fprofile-update=atomic"
+	mv HipSTR-MT HipSTR-MT.pgo-instrument
+	./HipSTR-MT.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --threads 1 --min-reads 10
+	./HipSTR-MT.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --threads 4 --min-reads 10
+	./HipSTR-MT.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --threads $(shell nproc) --min-reads 10
+	./HipSTR-MT.pgo-instrument --bams $(PGO_BAM_LIST) --fasta $(PGO_FASTA) --regions $(PGO_BED) --str-vcf $(PGO_TRAIN_VCF) --snp-vcf $(PGO_SNP_VCF) --threads 4 --min-reads 10
+	rm -f HipSTR-MT.pgo-instrument
 	$(MAKE) clean
-	$(MAKE) HipSTR CXXFLAGS="$(CXXFLAGS) -fprofile-use=$(CURDIR)/$(PGO_DIR) -fprofile-correction -Wno-coverage-mismatch -Wno-missing-profile"
-	mv HipSTR HipSTR.pgo-tmp
+	$(MAKE) HipSTR-MT CXXFLAGS="$(CXXFLAGS) -fprofile-use=$(CURDIR)/$(PGO_DIR) -fprofile-correction -Wno-coverage-mismatch -Wno-missing-profile"
+	mv HipSTR-MT HipSTR-MT.pgo-tmp
 	$(MAKE) clean
-	mv HipSTR.pgo-tmp HipSTR
+	mv HipSTR-MT.pgo-tmp HipSTR-MT
 	$(MAKE) DenovoFinder
-	@echo "[pgo] HipSTR rebuilt with profile-guided optimization ($(PGO_DIR)/)"
+	@echo "[pgo] HipSTR-MT rebuilt with profile-guided optimization ($(PGO_DIR)/)"
 
 # Clean the generated files of the main project only
 .PHONY: clean
 clean:
-	rm -f *~ src/*.o src/*.d src/*~ src/SeqAlignment/*~ src/SeqAlignment/*.o src/SeqAlignment/*.d src/denovos/*~ src/denovos/*.o src/denovos/*.d HipSTR DenovoFinder test/allele_expansion_test test/fast_ops_test test/haplotype_test test/read_vcf_alleles_test test/snp_tree_test test/vcf_snp_tree_test
+	rm -f *~ src/*.o src/*.d src/*~ src/SeqAlignment/*~ src/SeqAlignment/*.o src/SeqAlignment/*.d src/denovos/*~ src/denovos/*.o src/denovos/*.d HipSTR-MT DenovoFinder test/allele_expansion_test test/fast_ops_test test/haplotype_test test/read_vcf_alleles_test test/snp_tree_test test/vcf_snp_tree_test
 
 # ====================================================================
 # 3. ADD AUTOMATION TO CLEAN THE MIMALLOC ARTIFACTS
@@ -157,7 +157,7 @@ clean-all: clean
 	rm -f lib/cephes/*.o $(CEPHES_LIB)
 	rm -rf $(MIMALLOC_ROOT)/build
 	rm -rf $(LIBDEFLATE_ROOT)/build
-	rm -rf pgo-data HipSTR.pgo-instrument
+	rm -rf pgo-data HipSTR-MT.pgo-instrument
 
 # Include auto-generated header dependencies when present.
 -include $(DEP)
@@ -165,7 +165,7 @@ clean-all: clean
 # ====================================================================
 # 4. DEPENDENCY TRACKING: ENSURE HIPSTR REBUILDS IF MIMALLOC CHANGES
 # ====================================================================
-HipSTR: $(OBJ_COMMON) $(OBJ_HIPSTR) $(CEPHES_LIB) $(HTSLIB_LIB) $(MIMALLOC_LIB) $(LIBDEFLATE_LIB) $(OBJ_SEQALN)
+HipSTR-MT: $(OBJ_COMMON) $(OBJ_HIPSTR) $(CEPHES_LIB) $(HTSLIB_LIB) $(MIMALLOC_LIB) $(LIBDEFLATE_LIB) $(OBJ_SEQALN)
 	$(CXX) $(LDFLAGS) $(CXXFLAGS) $(INCLUDE) -o $@ $(filter-out $(MIMALLOC_LIB) $(LIBDEFLATE_LIB),$^) $(LIBS)
 
 DenovoFinder: $(OBJ_DENOVO) $(HTSLIB_LIB) $(MIMALLOC_LIB) $(LIBDEFLATE_LIB)

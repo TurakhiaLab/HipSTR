@@ -571,7 +571,7 @@ void BamProcessor::verify_chromosomes(const std::vector<std::string>& chroms, co
 	  full_logger() << "\t" << "NOTE: Found chromosome " << (*alt_iter) << " in the FASTA, but not chromosome " << chrom << std::endl;
 
       // Abort execution
-      printErrorAndDie("Terminating HipSTR as chromosomes in the region file are missing from the FASTA file. Please see the log for details");
+      printErrorAndDie("Terminating HipSTR-MT as chromosomes in the region file are missing from the FASTA file. Please see the log for details");
     }
 
     // 2. Check BAMs
@@ -587,7 +587,7 @@ void BamProcessor::verify_chromosomes(const std::vector<std::string>& chroms, co
 	  full_logger() << "\t" << "NOTE: Found chromosome " << (*alt_iter) << " in the BAM/CRAM(s), but not chromosome " << chrom << std::endl;
 
       // Abort execution
-      printErrorAndDie("Terminating HipSTR as chromosomes in the region file are missing from the BAM/CRAM(s). Please see the log for details");
+      printErrorAndDie("Terminating HipSTR-MT as chromosomes in the region file are missing from the BAM/CRAM(s). Please see the log for details");
     }
   }
 
@@ -867,7 +867,7 @@ void BamProcessor::process_regions(BamCramMultiReader& reader,
   //std::ofstream ofs("hipstr_parallel_profile.tfp", std::ios::binary);
   //observer->dump(ofs);
 
-  full_logger() << "HipSTRParallel total wall time: "
+  full_logger() << "HipSTR-MT total wall time: "
                 << std::chrono::duration<double>(wall_end - wall_start).count()
                 << " s\n";
 }

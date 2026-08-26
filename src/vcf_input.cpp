@@ -13,7 +13,7 @@ const std::string PHASED_GL_KEY   = "PHASEDGL";
 std::string START_INFO_TAG        = "START";
 std::string STOP_INFO_TAG         = "END";
 
-// Because HipSTR extends putative STR regions if there are nearby indels, the STR coordinates in the VCF may
+// Because HipSTR-MT extends putative STR regions if there are nearby indels, the STR coordinates in the VCF may
 // not exactly match the original reference region coordinates. As a result, when looking for a particular STR region,
 // we look for entries a window around the locus. The size of this window is controlled by this parameter
 const int32_t pad = 50;

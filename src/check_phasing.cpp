@@ -29,7 +29,7 @@ void print_usage(){
 	    << "Required parameters:" << "\n"
 	    << "\t" << "--fam        <fam_file>            "  << "\t" << "FAM file containing pedigree information for samples of interest"                     << "\n"
 	    << "\t" << "--snp-vcf    <phased_snps.vcf.gz>  "  << "\t" << "Bgzipped input VCF file containing phased SNP genotypes for the samples."             << "\n"
-	    << "\t" << "                                   "  << "\t" << " File should be identical to --snp-vcf argument provided to HipSTR during genotyping" << "\n"
+	    << "\t" << "                                   "  << "\t" << " File should be identical to --snp-vcf argument provided to HipSTR-MT during genotyping" << "\n"
 	    << "\t" << "--regions    <region_file.bed>     "  << "\t" << "BED file containing coordinates for each STR region"                                  << "\n"
 	    << "\t" << "--out        <edit_distances.gz>   "  << "\t" << "Path to which edit distance file will be written"                                     << "\n" << "\n"
 

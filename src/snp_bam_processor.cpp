@@ -34,7 +34,7 @@ void SNPBamProcessor::verify_vcf_chromosomes(const std::vector<std::string>& chr
 	  full_logger() << "\t" << "NOTE: Found chromosome " << (*alt_iter) << " in the VCF, but not chromosome " << chrom << std::endl;
 
       // Abort execution
-      printErrorAndDie("Terminating HipSTR as chromosomes in the region file are missing from the SNP VCF file. Please see the log for details");
+      printErrorAndDie("Terminating HipSTR-MT as chromosomes in the region file are missing from the SNP VCF file. Please see the log for details");
     }
   }
 }

@@ -220,7 +220,7 @@ public:
     if (output_viz_)
       viz_out_.close();
 
-    full_logger() << "\n\n\n------HipSTR Execution Summary------\n";
+    full_logger() << "\n\n\n------HipSTR-MT Execution Summary------\n";
     if (num_too_long_ != 0)
       full_logger() << "Skipped " << num_too_long_   << " loci whose lengths were above the maximum threshold.\n"
 		    << "\t If this is a sizeable portion of your loci, see the --max-str-len command line option\n";

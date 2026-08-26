@@ -1,4 +1,4 @@
-# HipSTR
+# HipSTR-MT
 **H**aplotype **i**nference and **p**hasing for **S**hort **T**andem **R**epeats  
 ![HipSTR icon!](https://raw.githubusercontent.com/tfwillems/HipSTR/master/img/HipSTR_icon_small.png)
 
@@ -29,14 +29,14 @@ Short tandem repeats [(STRs)](http://en.wikipedia.org/wiki/Microsatellite) are h
 
 Despite their utility, STRs are particularly difficult to genotype. The repetitive sequence responsible for their high mutability also results in frequent alignment errors that can complicate and bias downstream analyses. In addition, PCR stutter errors often result in reads that contain additional or fewer repeat copies than the true underlying genotype. 
 
-**HipSTR** was specifically developed to deal with these errors in the hopes of obtaining more robust STR genotypes. In particular, it accomplishes this by:
+**HipSTR-MT** was specifically developed to deal with these errors in the hopes of obtaining more robust STR genotypes. In particular, it accomplishes this by:
 
 1. Learning locus-specific PCR stutter models using an [EM algorithm](http://en.wikipedia.org/wiki/Expectation-maximization_algorithm)
 2. Mining candidate STR alleles from population-scale sequencing data
 3. Employing a specialized hidden Markov model to align reads to candidate alleles while accounting for STR artifacts
 4. Utilizing phased SNP haplotypes to genotype and phase STRs
 
-In our opinion, all of these factors make **HipSTR** the most reliable tool for genotyping STRs from **Illumina** sequencing data.
+In our opinion, all of these factors make **HipSTR-MT** the most reliable tool for genotyping STRs from **Illumina** sequencing data.
 
 ## Requirements
 HipSTR-MT keeps the original HipSTR runtime requirements and adds a modern C++ compiler for Taskflow:
@@ -57,31 +57,31 @@ On Ubuntu 16+ systems, the system packages can be installed with:
 ## Installation
 Taskflow's headers and mimalloc's build-relevant source are vendored directly in this repo (the same way `lib/htslib` already is) rather than pulled in as git submodules, so a plain clone is all you need — no `--recurse-submodules`, no `git submodule update --init --recursive` to remember:
 
-    git clone https://github.com/TurakhiaLab/HipSTR
+    git clone https://github.com/TurakhiaLab/HipSTR-MT
 
 To build, use Make:
 
-    cd HipSTR
+    cd HipSTR-MT
     make
 
-The command constructs an executable file called **HipSTR** in the current directory and builds mimalloc automatically as part of that. View detailed help with:
+The command constructs an executable file called **HipSTR-MT** in the current directory and builds mimalloc automatically as part of that. View detailed help with:
 
-    ./HipSTR --help
+    ./HipSTR-MT --help
 
 The Makefile now emits compiler dependency files with `-MMD -MP`, so header changes in `src`, `src/SeqAlignment`, and `src/denovos` trigger the required object rebuilds.
 
 ### Building with profile-guided optimization
     make pgo
 
-`make pgo` compiles an instrumented `HipSTR`, trains it against a bundled fixture (`test/pgo/`: a real ~1Mb chr20 STR locus cluster with matching FASTA and 13 subsetted sample BAMs), then recompiles the final `HipSTR` using the resulting profile. Training and both compiles happen locally, so the binary is tuned for whatever machine ran `make pgo` rather than shipping a profile baked in on other hardware. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags.
+`make pgo` compiles an instrumented `HipSTR-MT`, trains it against a bundled fixture (`test/pgo/`: a real ~1Mb chr20 STR locus cluster with matching FASTA and 13 subsetted sample BAMs), then recompiles the final `HipSTR-MT` using the resulting profile. Training and both compiles happen locally, so the binary is tuned for whatever machine ran `make pgo` rather than shipping a profile baked in on other hardware. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags.
 
 **Not currently recommended**: measured on GCC 11.4 and 13.1, `make pgo` produces a binary 5-7% *slower* than plain `make`, from an interaction between `-fprofile-use` and `-flto=auto`. See the Makefile's PGO section for details. Use plain `make` until that interaction is resolved.
 
 ## Quick Start
-To run HipSTR in its most broadly applicable mode, run it on **all samples concurrently** using the syntax:
+To run HipSTR-MT in its most broadly applicable mode, run it on **all samples concurrently** using the syntax:
 
 ```
-./HipSTR --bams          run1.bam,run2.bam,run3.bam,run4.bam
+./HipSTR-MT --bams          run1.bam,run2.bam,run3.bam,run4.bam
          --fasta         genome.fa
          --regions       str_regions.bed
          --str-vcf       str_calls.vcf.gz
@@ -94,7 +94,7 @@ To run HipSTR in its most broadly applicable mode, run it on **all samples concu
 * **str-vcf** : The output path for the STR genotypes
 * **threads** : Number of Taskflow executor worker threads. If omitted, HipSTR-MT chooses a hardware-aware default from scheduler CPU allocations, Linux CPU affinity, or `std::thread::hardware_concurrency()`. Internally, HipSTR-MT keeps four pipeline lines in flight per worker to hide serial fetch/write latency.
 
-For each region in *str_regions.bed*, **HipSTR** will:
+For each region in *str_regions.bed*, **HipSTR-MT** will:
 
 1. Learn a stutter model for each locus
 2. Use the stutter model and haplotype-based alignment algorithm to genotype each individual
@@ -103,7 +103,7 @@ For each region in *str_regions.bed*, **HipSTR** will:
 ## HipSTR-MT Changes
 HipSTR-MT is a performance fork of [gymrek-lab/HipSTR](https://github.com/gymrek-lab/HipSTR) and that baseline is the comparison for all claims below.
 
-**Correctness**: verified against the outputs of the Gymrek Lab's version of HipSTR using a tolerant VCF comparator (exact match required on genotype calls; float-typed fields allowed under 1e-3 relative drift). Genotype calls match exactly on the tutorial dataset and the NA12878/NA12891/NA12892 trio; a small number of loci show up to ~9e-4 relative drift in derived statistics (`PDP`, `GLDIFF`) from SIMD/codegen-dependent summation order.
+**Correctness**: verified against the outputs of the Gymrek Lab's version of HipSTR using a tolerant VCF comparator (exact match required on genotype calls; float-typed fields allowed under 1e-3 relative drift). Genotype calls and all derived statistics now match exactly (0 drift) on both the 599-locus tutorial trio and a full-genome NA12891 run (1,512,240 loci) -- see [Vectorization](#vectorization) for a correctness bug this surfaced and fixed in the target_clones dispatch.
 
 ### Parallelization
 - `bam_processor.*` replaces the single-region loop with a three-stage Taskflow pipeline: serial region token creation, parallel read filtering/genotyping, and serial ordered output. Regions are processed out of order across worker threads but written in the original BED order. Each pipeline line gets its own `BamCramMultiReader` and `AdapterTrimmer` instance, buffers its pass/filter BAM records instead of writing them inline, and all lines share one cached FASTA chromosome sequence rather than each copying it.
@@ -129,6 +129,7 @@ Two pieces of the original single-threaded code held mutable state that's safe w
 - **`mathops.cpp`'s `sum`/`log_sum_exp`/`fast_log_sum_exp`** are compiled with `__attribute__((target_clones("avx512f,avx2,sse4.2,default")))`, which builds one copy per listed ISA and dispatches to the best one the CPU supports at runtime. This is portable across machines (unlike `-march=native`, which isn't used anywhere in this build) and requires no user configuration.
 - **`log_sum_exp`**'s `exp()` reduction is vectorized via glibc's libmvec (correctly-rounded, not an approximation) using `#pragma omp simd` and `-fopenmp-simd`, which pulls in no OpenMP runtime.
 - **`fast_log_sum_exp`** batches 4 elements at a time using `vfasterexp()`, an SSE-vectorized helper already vendored in `fastonebigheader.h` but previously unused.
+- All three `target_clones`'d functions carry `__attribute__((optimize("-ffp-contract=off")))`. Without it, the avx512f/avx2 clones let the compiler fuse multiply-adds that the default clone doesn't, so identical source could round differently depending purely on which ISA clone the CPU dispatches to at runtime -- confirmed by full-genome testing to flip a stutter-block candidate's log-probability at a couple of homopolymer STR loci, changing which alleles got discovered as candidates at one of them. Fixed without giving up per-machine ISA dispatch.
 
 ### Dependency and I/O fixes
 - **htslib upgraded 1.9 → 1.24.** The vendored 1.9 copy's `fai_retrieve()` read FASTA sequence one byte at a time (`bgzf_getc()` plus a locale-aware `isgraph()` check per byte). Since chromosome loading runs in the pipeline's mandatory serial stage, this cost didn't shrink with more worker threads — on the tutorial dataset it was ~66% of the wall-clock floor at high thread counts. 1.24 pulls in upstream's already-fixed block-read implementation instead of a local patch: total FASTA load time across chr1–22 dropped from 7.17s to 1.36s, and wall time at `--threads 24` dropped from ~10.85s to ~5.5–6.7s. Picking up the newer vendored source needed two small C++-compatibility fixes: an explicit cast in `cram/cram_io.h` (implicit `void*` conversion is valid C, not C++) and a missing `<unistd.h>` include in `bam_io.h`/`denovo_main.cpp` for `access()`/`F_OK`, both previously masked by htslib 1.9's transitive includes.
@@ -140,10 +141,10 @@ Two pieces of the original single-threaded code held mutable state that's safe w
 - **`--output-hap-fields`** — writes extra `LFLANKS`/`RFLANKS`/`HQ`/`PHQ`/`LFGT`/`RFGT` fields about the full assembled haplotypes,
 
 ## Tutorial
-To demonstrate how you can quickly apply HipSTR to whole-genome sequencing datasets, we've built a simple [tutorial](https://hipstr-tool.github.io/HipSTR-tutorial/). In less than 10 minutes, this tutorial will teach you how to genotype ~600 STRs in a deeply sequenced trio of individuals and inspect the results.
+To demonstrate how you can quickly apply HipSTR-MT to whole-genome sequencing datasets, we've built a simple [tutorial](https://hipstr-tool.github.io/HipSTR-tutorial/). In less than 10 minutes, this tutorial will teach you how to genotype ~600 STRs in a deeply sequenced trio of individuals and inspect the results.
 
 ## In-depth Usage
-**HipSTR** has a variety of usage options designed to accomodate scenarios in which the sequencing data varies in terms of the number of samples and the coverage. Most scenarios will fall into one of the following categories:
+**HipSTR-MT** has a variety of usage options designed to accomodate scenarios in which the sequencing data varies in terms of the number of samples and the coverage. Most scenarios will fall into one of the following categories:
 
 1. 100 or more low-coverage (~5x) samples
     * Sufficient reads for stutter estimation
@@ -165,10 +166,10 @@ To demonstrate how you can quickly apply HipSTR to whole-genome sequencing datas
 <a id="mode-1"></a>
 
 #### Mode 1: De novo stutter estimation + STR calling with de novo allele generation
-This mode is identical to the one suggested in the **Quick Start** section as it suits most applications. HipSTR will output the STR genotypes in bgzipped VCF format to *str_calls.vcf.gz* 
+This mode is identical to the one suggested in the **Quick Start** section as it suits most applications. HipSTR-MT will output the STR genotypes in bgzipped VCF format to *str_calls.vcf.gz* 
 
 ```
-./HipSTR --bams             run1.bam,run2.bam,run3.bam,run4.bam
+./HipSTR-MT --bams             run1.bam,run2.bam,run3.bam,run4.bam
          --fasta            genome.fa
          --regions          str_regions.bed
          --str-vcf          str_calls.vcf.gz
@@ -180,21 +181,21 @@ This mode is identical to the one suggested in the **Quick Start** section as it
 The sole difference in this mode is that we no longer learn stutter models using the EM algorithm but instead input them from the **stutter-in** file. For more details on the stutter model file format, see [below](#stutter-file).
 
 ```
-./HipSTR --bams             run1.bam,run2.bam,run3.bam,run4.bam
+./HipSTR-MT --bams             run1.bam,run2.bam,run3.bam,run4.bam
          --fasta            genome.fa
          --regions          str_regions.bed
          --stutter-in       ext_stutter_models.txt
          --str-vcf          str_calls.vcf.gz
 ```
-If you don't have access to external stutter models for the **stutter-in** option, use **def-stutter-model**. This will use a simplistic stutter model for all loci (see the HipSTR help message for specifics).
+If you don't have access to external stutter models for the **stutter-in** option, use **def-stutter-model**. This will use a simplistic stutter model for all loci (see the HipSTR-MT help message for specifics).
 
 <a id="mode-3"></a>
 
 #### Mode 3: External stutter models + STR calling with a reference panel
-This mode is very similar to mode 2, except that we provide an additional VCF file containing known STR genotypes at each locus using the **str-vcf** option. **HipSTR** will not identify any additional candidate STR alleles in the BAMs/CRAMs when this option is specified, so it's best to use a VCF that contains STR genotypes for a wide range of populations and individuals. 
+This mode is very similar to mode 2, except that we provide an additional VCF file containing known STR genotypes at each locus using the **str-vcf** option. **HipSTR-MT** will not identify any additional candidate STR alleles in the BAMs/CRAMs when this option is specified, so it's best to use a VCF that contains STR genotypes for a wide range of populations and individuals. 
 
 ```
-./HipSTR --bams             run1.bam,run2.bam,run3.bam,run4.bam
+./HipSTR-MT --bams             run1.bam,run2.bam,run3.bam,run4.bam
          --fasta            genome.fa
          --regions          str_regions.bed
          --stutter-in       ext_stutter_models.txt
@@ -202,21 +203,21 @@ This mode is very similar to mode 2, except that we provide an additional VCF fi
          --str-vcf          str_calls.vcf.gz
 ```
 
-If you don't have access to external stutter models for the **stutter-in** option, use **def-stutter-model**. This will use a simplistic stutter model for all loci (see the HipSTR help message for specifics).
+If you don't have access to external stutter models for the **stutter-in** option, use **def-stutter-model**. This will use a simplistic stutter model for all loci (see the HipSTR-MT help message for specifics).
 
 ## Data Requirements
-To genotype STRs, **HipSTR** requires Illumina sequencing data. However, as the depth of sequencing and the read length in these datasets can vary dramatically, here we briefly describe key factors to consider before generating data for HipSTR analyses.
+To genotype STRs, **HipSTR-MT** requires Illumina sequencing data. However, as the depth of sequencing and the read length in these datasets can vary dramatically, here we briefly describe key factors to consider before generating data for HipSTR-MT analyses.
 
-Because of the repetitive nature of STRs, reads that do not fully extend across the repeat only provide a lower bound on its length. While this lower bound is informative and is leveraged by **HipSTR**, obtaining accurate and robust STR genotypes requires reads that fully extend across the repetitive sequence (*i.e. spanning reads*). The number of reads that span an STR is a function of the read length, the sequencing depth, and the length of the repeat (as well as various other factors). The interplay between these factors is relatively complex, but [**Figure 2** in a recent review](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4254273/figure/F2/) by *Press et al.* nicely highlights these dependencies. As one would intuitively expect, using longer read lengths and higher sequencing coverage increases the number of spanning reads. Conversely, increasing the length of the repeat reduces the number of spanning reads, making it more difficult to accurately genotype long STRs. When the number of spanning reads approaches single digits, you statistically run the risk of observing reads from only 1 out of 2 chromosome copies, making it impossible to correctly call both alleles in a heterozygous individual. 
+Because of the repetitive nature of STRs, reads that do not fully extend across the repeat only provide a lower bound on its length. While this lower bound is informative and is leveraged by **HipSTR-MT**, obtaining accurate and robust STR genotypes requires reads that fully extend across the repetitive sequence (*i.e. spanning reads*). The number of reads that span an STR is a function of the read length, the sequencing depth, and the length of the repeat (as well as various other factors). The interplay between these factors is relatively complex, but [**Figure 2** in a recent review](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4254273/figure/F2/) by *Press et al.* nicely highlights these dependencies. As one would intuitively expect, using longer read lengths and higher sequencing coverage increases the number of spanning reads. Conversely, increasing the length of the repeat reduces the number of spanning reads, making it more difficult to accurately genotype long STRs. When the number of spanning reads approaches single digits, you statistically run the risk of observing reads from only 1 out of 2 chromosome copies, making it impossible to correctly call both alleles in a heterozygous individual. 
 
 In our own analyses, we've found that 100 bp Illumina reads are sufficient to characterize the majority of STRs in the human genome. However, genotyping STRs that exceed 70bp (such as very long forensic STRs) invariably requires longer reads, but most human STRs are much shorter than this threshold. This read length will likely be sufficient for most model organisms unless their repeats are substantially longer than those in humans.
 
-The optimal minimum sequencing depth for HipSTR largely depends on your intended analyses. If you are interested in studying how STRs mutate or [want to identify de novo mutations](#de-novo-mutations), 30x coverage is an ideal minimum that allows HipSTR to provide the required high degree of specificity. Conversely, if you are merely interested in studying the allele frequencies for various STRs in a population, 10x coverage will likely be sufficient. However, in this setting, there will likely be many genotyping errors in which heterozygous genotypes are miscalled as homozygotes.
+The optimal minimum sequencing depth for HipSTR-MT largely depends on your intended analyses. If you are interested in studying how STRs mutate or [want to identify de novo mutations](#de-novo-mutations), 30x coverage is an ideal minimum that allows HipSTR-MT to provide the required high degree of specificity. Conversely, if you are merely interested in studying the allele frequencies for various STRs in a population, 10x coverage will likely be sufficient. However, in this setting, there will likely be many genotyping errors in which heterozygous genotypes are miscalled as homozygotes.
 
-Based on the nature of your sequencing data, one important HipSTR option to consider is **min-reads**. HipSTR uses the value of this parameter to skip any STRs where few than *N* reads are available for genotyping across all individuals. By default, this value is 100, as we've found that this is a good minimum threshold for learning stutter models prior to genotyping. If you're analyzing very few samples (e.g. a single mother-father-child trio), you may want to consider lowering this threshold as you will seldom have 100 reads. In this setting, it makes sense to use options like **--min-reads 15 --def-stutter-model**, where the latter option uses a default stutter model as too few reads are available for accurately inferring one. However, if you're analyzing many samples (e.g. more than ten 30x genomes or more than thirty 10x genomes), it likely doesn't make sense to change this parameter. In these settings, regions with fewer than 100 reads may have high GC content that is problematic for Illumina sequencing, may be difficult to map to, or may merely be too long for your chosen read length.  
+Based on the nature of your sequencing data, one important HipSTR-MT option to consider is **min-reads**. HipSTR-MT uses the value of this parameter to skip any STRs where few than *N* reads are available for genotyping across all individuals. By default, this value is 100, as we've found that this is a good minimum threshold for learning stutter models prior to genotyping. If you're analyzing very few samples (e.g. a single mother-father-child trio), you may want to consider lowering this threshold as you will seldom have 100 reads. In this setting, it makes sense to use options like **--min-reads 15 --def-stutter-model**, where the latter option uses a default stutter model as too few reads are available for accurately inferring one. However, if you're analyzing many samples (e.g. more than ten 30x genomes or more than thirty 10x genomes), it likely doesn't make sense to change this parameter. In these settings, regions with fewer than 100 reads may have high GC content that is problematic for Illumina sequencing, may be difficult to map to, or may merely be too long for your chosen read length.  
 
 ## Phasing
-HipSTR utilizes phased SNP haplotypes to phase the resulting STR genotypes. To do so, it looks for pairs of reads in which the STR-containing read or its mate pair overlap a samples's heterozygous SNP. In these instances, the quality score for the overlapping base can be used to determine the likelihood that the read came from each haplotype. Alternatively, when this information is not available, we assign the read an equal likelihood of coming from either strand. These likelihoods are incorporated into the HipSTR genotyping model which outputs phased genotypes. The quality of a phasing is reflected in the *PQ* FORMAT field, which provides the posterior probability of each sample's phased genotype. For homozygous genotypes, this value will always equal the *Q* FORMAT field as phasing is irrelevant. However, for heterozygous genotypes, if *PQ ~ Q*, it indicates that one of the two phasings is much more favorable. Alterneatively, if none of a sample's reads overlap heterozygous SNPs, both phasings will be equally probable and *PQ ~ Q/2*. To enable the use of physical phasing, supply HipSTR with the **snp-vcf** option and a SNP VCF containing **phased** haplotypes. The schematic below outlines the concepts underlying HipSTR's physical phasing model:
+HipSTR-MT utilizes phased SNP haplotypes to phase the resulting STR genotypes. To do so, it looks for pairs of reads in which the STR-containing read or its mate pair overlap a samples's heterozygous SNP. In these instances, the quality score for the overlapping base can be used to determine the likelihood that the read came from each haplotype. Alternatively, when this information is not available, we assign the read an equal likelihood of coming from either strand. These likelihoods are incorporated into the HipSTR-MT genotyping model which outputs phased genotypes. The quality of a phasing is reflected in the *PQ* FORMAT field, which provides the posterior probability of each sample's phased genotype. For homozygous genotypes, this value will always equal the *Q* FORMAT field as phasing is irrelevant. However, for heterozygous genotypes, if *PQ ~ Q*, it indicates that one of the two phasings is much more favorable. Alterneatively, if none of a sample's reads overlap heterozygous SNPs, both phasings will be equally probable and *PQ ~ Q/2*. To enable the use of physical phasing, supply HipSTR-MT with the **snp-vcf** option and a SNP VCF containing **phased** haplotypes. The schematic below outlines the concepts underlying HipSTR-MT's physical phasing model:
 
 ![Phasing schematic!](https://raw.githubusercontent.com/tfwillems/HipSTR/master/img/phasing.png)
 
@@ -239,27 +240,27 @@ Option 1: Analyze each chromosome in parallel using the **--chrom** option. For 
 Option 2: Split your BED file into *N* files and analyze each of the *N* files in parallel. This allows you to parallelize analyses in a manner similar to option 1 but can be used for increased speed if *N* is much greater than the number of chromosomes.
 
 ## Default Filtering
-HipSTR sometimes automatically filters genotypes on a per-sample basis and will report a missing value in the VCF file. These filters are applied when a sample's data suggests that HipSTR will not be able to produce a reliable genotype. For each locus, a summary of the number of filtered samples is output in the **log** file. If you specify the **--output-filters** command line option, a FORMAT field called **FILTER** will be reported in the VCF for each sample, where *PASS* designates ok samples and other values indicate the reason for filtering. 
+HipSTR-MT sometimes automatically filters genotypes on a per-sample basis and will report a missing value in the VCF file. These filters are applied when a sample's data suggests that HipSTR-MT will not be able to produce a reliable genotype. For each locus, a summary of the number of filtered samples is output in the **log** file. If you specify the **--output-filters** command line option, a FORMAT field called **FILTER** will be reported in the VCF for each sample, where *PASS* designates ok samples and other values indicate the reason for filtering. 
 
 **Samples with a PASS value should still undergo additional variant filtering (see below), as this merely indicates that no catastrophic issues were encountered during the genotyping process**. The table below summarizes the potential filtering reasons:  
 
 | Filter | Explanation 
 | :----- | :---------
 | NO_READS                | No alignments were available for the sample at the current STR. If reads overlap the STR in the BAM/CRAM, they may have been filtered due to read quality issues, mapping uniqueness or other reasons
-| FLANK_ASSEMBLY_CYCLIC   | During the genotyping process, HipSTR attempts to assemble the sequences upstream and downstream of the STR (*flank*) to identify any potential SNPs it should consider. This assembly process fails if the resulting assembly graph contains a cycle, resulting in this filter
-| FLANK_ASSEMBLY_INDEL    |This filter is triggered if the assembly process identifies an insertion or deletion in the *flanks*. These indels are problematic for HipSTR's model and thus it does not attempt to genotype the sample
-| FLANK_INDEL_FRAC        | When genotyping is complete, HipSTR determines the maximum-likelihood alignment of each read relative to its sample's called alleles. If a large fraction of the resulting alignments have indels in the *flanks*, it's a strong indicator that they're misaligned and the sample's genotype is therefore ignored
-| LOW_FREQUENCY_ALT_FLANK | Flanking sequences identified by the assembly process in each sample are pooled together to generate all candidate haplotypes. As the number of haplotypes grows exponentially with the number of such sequences, HipSTR conserves time by discarding flanks that are only present in a few samples. If a sample's data supports a low-frequency flank, it is not genotyped. To adjust this frequency cutoff, use the **--min-flank-freq** option 
+| FLANK_ASSEMBLY_CYCLIC   | During the genotyping process, HipSTR-MT attempts to assemble the sequences upstream and downstream of the STR (*flank*) to identify any potential SNPs it should consider. This assembly process fails if the resulting assembly graph contains a cycle, resulting in this filter
+| FLANK_ASSEMBLY_INDEL    |This filter is triggered if the assembly process identifies an insertion or deletion in the *flanks*. These indels are problematic for HipSTR-MT's model and thus it does not attempt to genotype the sample
+| FLANK_INDEL_FRAC        | When genotyping is complete, HipSTR-MT determines the maximum-likelihood alignment of each read relative to its sample's called alleles. If a large fraction of the resulting alignments have indels in the *flanks*, it's a strong indicator that they're misaligned and the sample's genotype is therefore ignored
+| LOW_FREQUENCY_ALT_FLANK | Flanking sequences identified by the assembly process in each sample are pooled together to generate all candidate haplotypes. As the number of haplotypes grows exponentially with the number of such sequences, HipSTR-MT conserves time by discarding flanks that are only present in a few samples. If a sample's data supports a low-frequency flank, it is not genotyped. To adjust this frequency cutoff, use the **--min-flank-freq** option 
 
 
 
 ## Call Filtering
-Although **HipSTR** mitigates many of the most common sources of STR genotyping errors, it's still extremely important to filter the resulting VCFs to discard low quality calls. To facilitate this process, the VCF output contains various FORMAT and INFO fields that are usually indicators of problematic calls. The INFO fields indicate the aggregate data for a locus and, if certain flags are raised, may suggest that the entire locus should be discarded. In contrast, FORMAT fields are available on a per-sample basis for each locus and, if certain flags are raised, suggest that some samples' genotypes should be discarded. The list below includes some of these fields and how they can be informative. The [dumpSTR](https://trtools.readthedocs.io/en/stable/source/dumpSTR.html) utility in the [TRTools package](https://trtools.readthedocs.io/en/stable/) — actively maintained by the Gymrek lab, with utilities for filtering, merging, and computing statistics on VCFs from HipSTR and other STR genotypers — can also be used to filter VCFs using most of the fields below, and is the currently recommended approach upstream.
+Although **HipSTR-MT** mitigates many of the most common sources of STR genotyping errors, it's still extremely important to filter the resulting VCFs to discard low quality calls. To facilitate this process, the VCF output contains various FORMAT and INFO fields that are usually indicators of problematic calls. The INFO fields indicate the aggregate data for a locus and, if certain flags are raised, may suggest that the entire locus should be discarded. In contrast, FORMAT fields are available on a per-sample basis for each locus and, if certain flags are raised, suggest that some samples' genotypes should be discarded. The list below includes some of these fields and how they can be informative. The [dumpSTR](https://trtools.readthedocs.io/en/stable/source/dumpSTR.html) utility in the [TRTools package](https://trtools.readthedocs.io/en/stable/) — actively maintained by the Gymrek lab, with utilities for filtering, merging, and computing statistics on VCFs from HipSTR-MT and other STR genotypers — can also be used to filter VCFs using most of the fields below, and is the currently recommended approach upstream.
 
 #### INFO fields:  
 1. **DP**: Reports the total depth/number of informative reads for all samples at the locus. The mean coverage per-sample can obtained by dividing this value by the number of samples with non-missing genotypes. In general, genotypes with a low mean coverage are unreliable because the reads may only have captured one of the two alleles if an individual is heterozygous.
-2. **DSTUTTER**: Reports the total number of reads at a locus with what HipSTR thinks is a stutter artifact. If the total fraction of reads with stutter (DSTUTTER/DP) is high, genotypes for a locus will be unreliable because the reads frequently don't reflect the true underlying genotype. A high fraction of stutter-containing reads can be caused by too much PCR amplification, a duplicated locus that is mapping to a single location in the genome, or a failure of HipSTR to identify sufficient candidate alleles.  
-3. **DFLANKINDEL**: Reports the total number of reads for which the maximum likelihood alignment contains an indel in the regions flanking the STR. A high fraction of reads with this artifact (DFLANKINDEL/DP) can be caused by an actual indel in a region neighboring the STR. However, it can also arise if HipSTR fails to identify sufficient candidate alleles. When these alleles are very different in size from the candidate alleles or are non-unit multiples, they're frequently aligned as indels in the flanking sequences.
+2. **DSTUTTER**: Reports the total number of reads at a locus with what HipSTR-MT thinks is a stutter artifact. If the total fraction of reads with stutter (DSTUTTER/DP) is high, genotypes for a locus will be unreliable because the reads frequently don't reflect the true underlying genotype. A high fraction of stutter-containing reads can be caused by too much PCR amplification, a duplicated locus that is mapping to a single location in the genome, or a failure of HipSTR-MT to identify sufficient candidate alleles.  
+3. **DFLANKINDEL**: Reports the total number of reads for which the maximum likelihood alignment contains an indel in the regions flanking the STR. A high fraction of reads with this artifact (DFLANKINDEL/DP) can be caused by an actual indel in a region neighboring the STR. However, it can also arise if HipSTR-MT fails to identify sufficient candidate alleles. When these alleles are very different in size from the candidate alleles or are non-unit multiples, they're frequently aligned as indels in the flanking sequences.
 
 #### FORMAT fields:  
 1. **Q**: Reports the posterior probability of the genotype. We've found that this is the best indicator of quality of an individual sample's genotype and almost always use it to filter calls.   
@@ -310,13 +311,13 @@ python scripts/filter_haploid_vcf.py -h
 
 This list is comprised of the most useful and frequently used additional options, but is not all encompassing. For a complete list of options, please type
 
-    ./HipSTR --help
+    ./HipSTR-MT --help
 
 <a id="aln-viz"></a>
 
 ## Alignment Visualization
-When deciphering and inspecting STR calls, it's extremely useful to visualize the supporting reads. HipSTR facilitates this through the **viz-out** option, which writes a compressed file containing alignments for each call that can be readily visualized using the **VizAln** command included in HipSTR's main directory. If you're interested in visualizing alignments, you first need to index the file using tabix. 
-For example, if you ran HipSTR with the option `--viz-out aln.viz.gz`, you should use the command
+When deciphering and inspecting STR calls, it's extremely useful to visualize the supporting reads. HipSTR-MT facilitates this through the **viz-out** option, which writes a compressed file containing alignments for each call that can be readily visualized using the **VizAln** command included in HipSTR-MT's main directory. If you're interested in visualizing alignments, you first need to index the file using tabix. 
+For example, if you ran HipSTR-MT with the option `--viz-out aln.viz.gz`, you should use the command
 
     tabix -p bed aln.viz.gz
 
@@ -328,7 +329,7 @@ You could then visualize the calls for sample *NA12878* at locus *chr1 3784267* 
 
 This command will automatically open a rendering of the alignments in your browser and might look something like:
 ![Read more words!](https://raw.githubusercontent.com/HipSTR-Tool/HipSTR-tutorial/master/viz_NA12878.png)
-The top bar represents the reference sequence and the red text indicates the name of the sample and its associated call at the locus. The remaining rows indicate the alignment for each read used in genotyping. In this particular example, 14 reads have an *8bp deletion* and 14 reads have a *4bp insertion*. HipSTR therefore genotypes this sample as *-8 | 4*
+The top bar represents the reference sequence and the red text indicates the name of the sample and its associated call at the locus. The remaining rows indicate the alignment for each read used in genotyping. In this particular example, 14 reads have an *8bp deletion* and 14 reads have a *4bp insertion*. HipSTR-MT therefore genotypes this sample as *-8 | 4*
 
 If we wanted to inspect all calls for the same locus, we could  use the command 
 
@@ -340,13 +341,13 @@ can be generated in a file alignments.pdf as follows:
 
     ./VizAlnPdf aln.viz.gz chr1 3784267 NA12878 alignments 1
 
-NOTE: Because the **viz-out** file can become fairly large if you're genotyping thousands of loci or thousands of samples, in some scenarios it may be best to rerun HipSTR using this option on the subset of loci which you wish to visualize.
+NOTE: Because the **viz-out** file can become fairly large if you're genotyping thousands of loci or thousands of samples, in some scenarios it may be best to rerun HipSTR-MT using this option on the subset of loci which you wish to visualize.
 
 ## File Formats
 <a id="bams"></a>
 
 ### BAM/CRAM files
-HipSTR requires [BAM/CRAM](https://samtools.github.io/hts-specs/SAMv1.pdf) files produced by any indel-sensitive aligner. These files must have been sorted by position using the `samtools sort` command and then indexed using `samtools index`. To associate a read with its sample of interest, HipSTR uses read group information in the BAM/CRAM header lines. These *@*RG lines must contain an *ID* field, an *LB* field indicating the library and an *SM* field indicating the sample. For example, if a BAM/CRAM contained the following header line
+HipSTR-MT requires [BAM/CRAM](https://samtools.github.io/hts-specs/SAMv1.pdf) files produced by any indel-sensitive aligner. These files must have been sorted by position using the `samtools sort` command and then indexed using `samtools index`. To associate a read with its sample of interest, HipSTR-MT uses read group information in the BAM/CRAM header lines. These *@*RG lines must contain an *ID* field, an *LB* field indicating the library and an *SM* field indicating the sample. For example, if a BAM/CRAM contained the following header line
 
     @RG     ID:RUN1 LB:ERR12345        SM:SAMPLE789
 
@@ -354,12 +355,12 @@ an alignment with the RG tag
 
     RG:Z:RUN1
 
-will be associated with sample *SAMPLE789* and library *ERR12345*. In this manner, HipSTR can analyze BAMs/CRAMs containing more than one sample and/or more than one library and can handle cases in which a single sample's reads are spread across multiple files.
+will be associated with sample *SAMPLE789* and library *ERR12345*. In this manner, HipSTR-MT can analyze BAMs/CRAMs containing more than one sample and/or more than one library and can handle cases in which a single sample's reads are spread across multiple files.
 
 Alternatively, if your BAM/CRAM files lack *RG* information, you can use the **bam-samps** and **bam-libs** flags to specify the sample and library associated with each file. In this setting, however, a BAM/CRAM can only contain a single library and a single read group. For example, the command
 
 ```
-./HipSTR --bams             run1.bam,run2.bam,run3.bam,run4.cram
+./HipSTR-MT --bams             run1.bam,run2.bam,run3.bam,run4.cram
          --fasta            genome.fa
          --regions          str_regions.bed
          --str-vcf          str_calls.vcf.gz
@@ -367,10 +368,10 @@ Alternatively, if your BAM/CRAM files lack *RG* information, you can use the **b
          --bam-libs         LIB1,LIB2,LIB3,LIB4
 ```
 
-essentially tells HipSTR to associate all the reads in the first two BAMS with *SAMPLE1*, all the reads in the third file with *SAMPLE2* and all the reads in the last BAM with *SAMPLE3*.
+essentially tells HipSTR-MT to associate all the reads in the first two BAMS with *SAMPLE1*, all the reads in the third file with *SAMPLE2* and all the reads in the last BAM with *SAMPLE3*.
 
 
-HipSTR can analyze both BAM and CRAM files simultaneously, so if your project contains a mixture of these two file types, HipSTR will automatically perform CRAM decompression as necessary. **When analyzing CRAM files, please ensure that the file provided to --fasta is the same FASTA file used during CRAM generation**. Otherwise, CRAM decompression will likely fail and bizarre behavior may occur.
+HipSTR-MT can analyze both BAM and CRAM files simultaneously, so if your project contains a mixture of these two file types, HipSTR-MT will automatically perform CRAM decompression as necessary. **When analyzing CRAM files, please ensure that the file provided to --fasta is the same FASTA file used during CRAM generation**. Otherwise, CRAM decompression will likely fail and bizarre behavior may occur.
 
 <a id="str-bed"></a>
 
@@ -407,7 +408,7 @@ we used to build the mouse BED file.
 For more information on the VCF file format, please see the [VCF spec](http://samtools.github.io/hts-specs/VCFv4.2.pdf). 
 
 #### INFO fields
-INFO fields contains aggregated statistics about each genotyped STR in the VCF. The INFO fields reported by HipSTR primarily describe the learned/supplied stutter model for the locus, the STR's reference coordinates (START and END) and information about the allele counts (AC) and number of reads used to genotype all samples (DP).
+INFO fields contains aggregated statistics about each genotyped STR in the VCF. The INFO fields reported by HipSTR-MT primarily describe the learned/supplied stutter model for the locus, the STR's reference coordinates (START and END) and information about the allele counts (AC) and number of reads used to genotype all samples (DP).
 
 FIELD | DESCRIPTION
 ----- | -----------
@@ -432,7 +433,7 @@ DSTUTTER       | Total number of reads with a stutter indel in the STR region
 DFLANKINDEL    | Total number of reads with an indel in the regions flanking the STR
 
 #### FORMAT fields
-FORMAT fields contain information about the genotype for each sample at the locus. In addition to the most probable phased genotype (GT), HipSTR reports information about the posterior likelihood of this genotype (PQ) and its unphased analog (Q). Other useful information reported are the number of reads that were used to determine the genotype (DP) and whether these had any alignment artifacts (DSTUTTER and DFLANKINDEL).
+FORMAT fields contain information about the genotype for each sample at the locus. In addition to the most probable phased genotype (GT), HipSTR-MT reports information about the posterior likelihood of this genotype (PQ) and its unphased analog (Q). Other useful information reported are the number of reads that were used to determine the genotype (DP) and whether these had any alignment artifacts (DSTUTTER and DFLANKINDEL).
 
 FIELD     | DESCRIPTION
 --------- | -----------
@@ -492,22 +493,22 @@ Each of the stutter parameters is defined as follows:
 | PERIOD   | Length of STR motif
 
 ## FAQ
-1. **Can I run HipSTR if my dataset only contains single-ended reads?**     
-**Yes.** HipSTR is designed for paired-end reads and uses mate pair information to filter reads that are potentially aligned to an incorrect STR prior to genotyping. By default, HipSTR therefore removes all reads without mate pairs. However, if your dataset only contains single-ended reads, specify the **use-unpaired** option to avoid performing this filtering.  
-2. **Can I use HipSTR to analyze PCR-amplified reads?**     
-**Yes.** As HipSTR was designed to analyze WGS data, HipSTR automatically identifies and filters out PCR duplicates prior to genotyping. When analyzing PCR-amplified reads, HipSTR will label most reads as PCR duplicates as they share exactly the same coordinates. To overcome this issue, specify the **no-rmdup** option to disable duplicate removal when analyzing this type of data.
+1. **Can I run HipSTR-MT if my dataset only contains single-ended reads?**     
+**Yes.** HipSTR-MT is designed for paired-end reads and uses mate pair information to filter reads that are potentially aligned to an incorrect STR prior to genotyping. By default, HipSTR-MT therefore removes all reads without mate pairs. However, if your dataset only contains single-ended reads, specify the **use-unpaired** option to avoid performing this filtering.  
+2. **Can I use HipSTR-MT to analyze PCR-amplified reads?**     
+**Yes.** As HipSTR-MT was designed to analyze WGS data, HipSTR-MT automatically identifies and filters out PCR duplicates prior to genotyping. When analyzing PCR-amplified reads, HipSTR-MT will label most reads as PCR duplicates as they share exactly the same coordinates. To overcome this issue, specify the **no-rmdup** option to disable duplicate removal when analyzing this type of data.
 3. **Why are some of the STRs in my BED file not present in the output VCF?**    
-HipSTR only genotypes a region if at least **min-reads** and at most **max-reads** overlap the STR. It then attempts to learn the stutter model (if appropriate), build haplotypes for the region and perform genotyping. If any of these stages is unsuccessful, it skips the STR and continues on to the next region. The **log** file contains the failure reason for each failed region as well as an overall summary of why regions were skipped at the end of the log.      
-4. **How can I run HipSTR if I have too few samples to learn stutter models and don't have external ones?**     
-In this scenario, you can run HipSTR with **def-stutter-model**. Invoking this option will disable the algorithm it uses to learn stutter models. Instead, HipSTR will use the same fixed stutter model to genotype every locus. We don't recommend using this option unless necessary, as genotypes are more accurate if you learn a specific model for each STR.
-5. **What sequencing platforms does HipSTR support?**		
-HipSTR was designed to analyze **Illumina** sequencing data. We do not recommend running it on PacBio or Oxford Nanopore data, as the difference in error profiles will be problematic 
+HipSTR-MT only genotypes a region if at least **min-reads** and at most **max-reads** overlap the STR. It then attempts to learn the stutter model (if appropriate), build haplotypes for the region and perform genotyping. If any of these stages is unsuccessful, it skips the STR and continues on to the next region. The **log** file contains the failure reason for each failed region as well as an overall summary of why regions were skipped at the end of the log.      
+4. **How can I run HipSTR-MT if I have too few samples to learn stutter models and don't have external ones?**     
+In this scenario, you can run HipSTR-MT with **def-stutter-model**. Invoking this option will disable the algorithm it uses to learn stutter models. Instead, HipSTR-MT will use the same fixed stutter model to genotype every locus. We don't recommend using this option unless necessary, as genotypes are more accurate if you learn a specific model for each STR.
+5. **What sequencing platforms does HipSTR-MT support?**		
+HipSTR-MT was designed to analyze **Illumina** sequencing data. We do not recommend running it on PacBio or Oxford Nanopore data, as the difference in error profiles will be problematic 
 
 ## Help
 If you're having trouble getting your analysis up and running:      
 
-    i.   Check out the HipSTR tutorial at https://hipstr-tool.github.io/HipSTR-tutorial
-    ii.  Type ./HipSTR --help for details about each command line option
+    i.   Check out the HipSTR-MT tutorial at https://hipstr-tool.github.io/HipSTR-tutorial
+    ii.  Type ./HipSTR-MT --help for details about each command line option
     iii. Email us at hipstrtool@gmail.com
 
 If you encounter a bug/issue or have a feature request:     
