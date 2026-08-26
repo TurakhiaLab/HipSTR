@@ -282,7 +282,7 @@ Although **HipSTR-MT** mitigates many of the most common sources of STR genotypi
 #### FORMAT fields:  
 1. **Q**: Reports the posterior probability of the genotype. We've found that this is the best indicator of quality of an individual sample's genotype and almost always use it to filter calls.   
 2. **DP**, **DSTUTTER** and **DFLANKINDEL**: Identical to the INFO field case, these fields are also available for each sample and can be used in the same way to identify problematic individual calls.  
-3. **AB** and **FS**: Quantify the log10 p-value of the allele bias and the Fisher strand bias, respectively. Large negative values indicate that the degree of bias observed is very unlikely to occur by random chance. In the case of **AB**, this indicates that the number of reads observed per allele is unlikely given the predicted genotype. In the case of **FS**, this indicates that there is a non-random association between sequencing strand and the allele each read is assigned to, suggesting that sequencing errors may be causing one of the reported alleles. Note that these fields are only applicable to diploid genotypes.   
+3. **AB** and **FS**: Quantify the log10 p-value of the allele bias and the Fisher strand bias, respectively. Large negative values indicate that the degree of bias observed is very unlikely to occur by random chance. Both compare read counts between the sample's two haplotype *copies* (the two parental chromosomes, distinguished via phased SNPs), not between distinct STR allele values -- so they're only meaningful for diploid samples with phasing information, and can be nonzero even for a homozygous STR call if reads split unevenly between the two copies. In the case of **AB**, an unlikely split suggests the observed read counts per haplotype copy are inconsistent with the predicted genotype. In the case of **FS**, it indicates a non-random association between sequencing strand and which copy each read is assigned to, suggesting sequencing errors may be inflating one of the reported alleles.   
 
 **So what thresholds do we suggest for each of these fields?** The answer really depends on the quality of the sequencing data, the ploidy of the chromosome and the downstream applications. As a starting point, dumpSTR options like `--hipstr-min-call-Q 0.9 --hipstr-max-call-flank-indel 0.15 --hipstr-max-call-stutter 0.15` are a reasonable default. Alternatively, this repo still bundles the original filtering scripts in the **scripts** subdirectory, which apply the same kind of thresholds directly without a TRTools dependency:
 
@@ -467,8 +467,8 @@ DSNP      | Total number of reads with SNP information
 PSNP      | Number of reads with SNPs supporting each haploid genotype
 DSTUTTER  | Number of reads with a stutter indel in the STR region
 DFLANKINDEL | Number of reads with an indel in the regions flanking the STR
-AB        | log10 of the allele bias pvalue, where 0 is no bias and more negative values are increasingly biased. For homozygous genotypes, this can be negative if the haplotypes are heterozygous
-FS        | log10 of the strand bias pvalue from Fisher's exact test, where 0 is no bias and more negative values are increasingly biased. For homozygous genotypes, this can be negative if the haplotypes are heterozygous
+AB        | log10 of the allele bias pvalue, where 0 is no bias and more negative values are increasingly biased. This compares read counts between the sample's two haplotype *copies* (chromosomes), not between STR allele values -- so it can still be negative for a homozygous STR genotype (same allele on both copies) if nearby phased SNPs distinguish the two copies and reads split unevenly between them
+FS        | log10 of the strand bias pvalue from Fisher's exact test, where 0 is no bias and more negative values are increasingly biased. Same per-haplotype-copy caveat as AB above: can be negative for a homozygous STR genotype if the two phased copies' reads have an uneven strand split
 DAB       | Number of reads used in the allele bias calculation
 ALLREADS  | Base pair difference observed in each read's Needleman-Wunsch alignment
 MALLREADS | Maximum likelihood bp diff in each read based on haplotype alignments
@@ -485,7 +485,7 @@ To model PCR stutter artifacts, we assume that there are three types of stutter 
 3. **No stutter change**: The size of the STR in the read is the same as the size of the underlying STR. 
 
 
-Stutter model files contain the information necessary to model each of these artifacts in a **tab-delimited BED-like** format with exactly 9 columns. An example of such a file is as follows:
+Stutter model files contain the information necessary to model each of these artifacts in a **tab-delimited BED-like** format with exactly 10 columns (all required -- `StutterModel::read()` in `src/stutter_model.cpp` fails to parse the file if any are missing, including `PERIOD`). An example of such a file is as follows:
 
 CHROM  | START       | END      | IGEOM | IDOWN | IUP   | OGEOM | ODOWN | OUP   | PERIOD
 -----  | ----------- | -------- | ----  | ----  | ---   | ----  | ---   | ---   | ---
