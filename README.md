@@ -9,6 +9,7 @@
 [Introduction](#introduction)  
 [Requirements](#requirements)  
 [Installation](#installation)  
+[Testing](#testing)  
 [Quick Start](#quick-start)       
 [HipSTR-MT Changes](#HipSTR-MT-changes)  
 [Tutorial](#tutorial)  
@@ -73,9 +74,21 @@ The Makefile now emits compiler dependency files with `-MMD -MP`, so header chan
 ### Building with profile-guided optimization
     make pgo
 
-`make pgo` compiles an instrumented `HipSTR-MT`, trains it against a bundled fixture (`test/pgo/`: a real ~1Mb chr20 STR locus cluster with matching FASTA and 13 subsetted sample BAMs), then recompiles the final `HipSTR-MT` using the resulting profile. Training and both compiles happen locally, so the binary is tuned for whatever machine ran `make pgo` rather than shipping a profile baked in on other hardware. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags.
+`make pgo` compiles an instrumented `HipSTR-MT`, trains it against a bundled fixture (`test/pgo/`: a real ~1Mb chr20 STR locus cluster, 654 loci, with matching FASTA and 2 subsetted sample BAMs), then recompiles the final `HipSTR-MT` using the resulting profile. Training and both compiles happen locally, so the binary is tuned for whatever machine ran `make pgo` rather than shipping a profile baked in on other hardware. `DenovoFinder` is unaffected — it's rebuilt afterward with normal flags. This same fixture also backs the correctness regression check -- see [Testing](#testing).
 
 **Not currently recommended**: measured on GCC 11.4 and 13.1, `make pgo` produces a binary 5-7% *slower* than plain `make`, from an interaction between `-fprofile-use` and `-flto=auto`. See the Makefile's PGO section for details. Use plain `make` until that interaction is resolved.
+
+## Testing
+    test/run_tests.sh
+
+Everything `test/run_tests.sh` runs is self-contained -- it builds what it needs and uses only fixture data already checked into `test/` (no external downloads).
+
+**Correctness regression** (`test/check_correctness.sh`, the primary check): runs `HipSTR-MT` against the same real ~1Mb chr20 fixture `make pgo` trains against (654 STR loci, 2 subsetted sample BAMs; see [Building with profile-guided optimization](#building-with-profile-guided-optimization)) and diffs the output against a committed golden VCF (`test/pgo/expected_output.vcf.gz`) using `test/compare_vcf_tolerant.py` -- a tolerant comparator that hard-fails on any genotype call change or >0.1% drift in derived statistics, but allows the sub-0.1% float noise that's inherent to floating-point summation order. This is genotyping correctness end-to-end (read filtering through haplotype alignment through genotype calling), not just one function in isolation, and it's the same tool and same tolerance used to validate this fork against unmodified upstream `gymrek-lab/HipSTR` -- see [Correctness](#hipstr-mt-changes) above, most recently confirmed with 0 discrepancies across the full 599-locus tutorial trio and a full-genome NA12891 run (1,512,240 loci).
+
+**Unit tests** (`test/*_test.cpp`, each independently buildable via `make test/<name>`):
+- **`snp_tree_test`** has a real pass/fail assertion: builds the same SNP set two ways (brute-force scan and the interval-tree structure `snp_bam_processor.cpp` actually uses) and asserts their query results agree.
+- **`fast_ops_test`**, **`haplotype_test`**, **`read_vcf_alleles_test`** are diagnostic -- they print output (approximation error tables, generated haplotype sequences, parsed VCF alleles) for manual inspection rather than asserting. `read_vcf_alleles_test` needs the bundled `test/input/1kg.chr1.imputed.vcf.gz` fixture (included in the run above).
+- **`em_stutter_test`** and **`vcf_snp_tree_test`** build but aren't included in the default run: `em_stutter_test`'s intended driver (`run_stutter_em_test.sh`) generates its input via an external STR-mutation simulator not bundled in this repo, and `vcf_snp_tree_test` expects a chr22:10-20Mb VCF not included here. Both take a VCF/BED path as an argument if you want to point them at your own data.
 
 ## Quick Start
 To run HipSTR-MT in its most broadly applicable mode, run it on **all samples concurrently** using the syntax:

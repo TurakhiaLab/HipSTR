@@ -92,8 +92,8 @@ version:
 # PROFILE-GUIDED OPTIMIZATION (PGO)
 # ====================================================================
 # `make pgo` builds HipSTR-MT twice: an instrumented pass trained on the
-# bundled fixture in test/pgo/ (a real 1Mb chr20 slice, 654 STR loci, 13
-# subsetted BAMs), then a final pass compiled against the resulting
+# bundled fixture in test/pgo/ (a real 1Mb chr20 slice, 654 STR loci, 2
+# subsetted sample BAMs), then a final pass compiled against the resulting
 # profile. Training and both compiles run locally, so the result is
 # tuned for whatever machine ran `make pgo` rather than shipped as a
 # prebuilt binary, and the profile can't go stale relative to the source.
@@ -177,7 +177,7 @@ PhasingChecker: src/check_phasing.cpp src/region.cpp src/error.cpp src/haplotype
 test/haplotype_test: test/haplotype_test.cpp src/SeqAlignment/Haplotype.cpp src/SeqAlignment/HapBlock.cpp src/SeqAlignment/NeedlemanWunsch.cpp src/error.cpp src/stringops.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -o $@ $^ $(LIBS)
 
-test/em_stutter_test: test/em_stutter_test.cpp src/em_stutter_genotyper.cpp src/genotyper_bam_processor.cpp src/error.cpp src/mathops.cpp src/stringops.cpp src/stutter_model.cpp
+test/em_stutter_test: test/em_stutter_test.cpp src/em_stutter_genotyper.cpp src/genotyper.cpp src/genotyper_bam_processor.cpp src/error.cpp src/mathops.cpp src/stringops.cpp src/stutter_model.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -o $@ $^ $(LIBS)
 
 test/fast_ops_test: test/fast_ops_test.cpp src/mathops.cpp

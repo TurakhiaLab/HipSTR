@@ -1,14 +1,15 @@
 #include <algorithm>
 #include <assert.h>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <sstream>
 #include <string>
 #include <vector>
 
-#include "../em_stutter_genotyper.h"
-#include "../stringops.h"
-#include "../stutter_model.h"
+#include "../src/em_stutter_genotyper.h"
+#include "../src/stringops.h"
+#include "../src/stutter_model.h"
 
 void read_bp_info(std::string input_file, int motif_len,
 		  std::vector<std::string>& sample_names, std::vector< std::vector<int> >& num_bps){
@@ -113,7 +114,7 @@ int main(int argc, char* argv[]){
   int MAX_EM_ITER         = 100;
   double ABS_LL_CONVERGE  = 0.01;
   double FRAC_LL_CONVERGE = 0.001;
-  EMStutterGenotyper genotyper(chrom, 0, 100, haploid, num_bps, log_p1s, log_p2s, sample_names, motif_len, 0);
+  EMStutterGenotyper genotyper(haploid, motif_len, num_bps, log_p1s, log_p2s, sample_names, 0);
 
   if (!genotyper.train(MAX_EM_ITER, ABS_LL_CONVERGE, FRAC_LL_CONVERGE, false, std::cerr)){
     std::cout << "EM_FAILED_TO_CONVERGE" << std::endl;
