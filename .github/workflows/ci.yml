@@ -1,0 +1,36 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Matches README.md's "Requirements" section exactly, so a CI failure
+      # here means the documented install instructions are themselves wrong.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make g++ zlib1g-dev libhts-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev cmake
+
+      - name: Build (plain make, not PGO -- see Makefile's PGO section)
+        run: make -j"$(nproc)"
+
+      - name: Run test suite
+        run: test/run_tests.sh
+
+      - name: Upload plots/logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: |
+            test/pgo/actual_output_t*.vcf.gz
+            test/pgo/actual_output_t*.log
+          if-no-files-found: ignore

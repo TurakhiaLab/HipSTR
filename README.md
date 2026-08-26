@@ -49,7 +49,7 @@ HipSTR-MT keeps the original HipSTR runtime requirements and adds a modern C++ c
 - libbz2
 - liblzma
 - libcurl and OpenSSL (dev headers) — vendored htslib 1.24's default build config always compiles in libcurl-backed remote-file support
-- CMake 3.18+ for building mimalloc, or the bundled Makefile fallback
+- CMake 3.18+ for building the vendored mimalloc and libdeflate (both CMake-only upstream builds); a portable CMake is downloaded automatically if the system one is too old or missing
 
 On Ubuntu 16+ systems, the system packages can be installed with:
 
@@ -83,7 +83,7 @@ The Makefile now emits compiler dependency files with `-MMD -MP`, so header chan
 
 Everything `test/run_tests.sh` runs is self-contained -- it builds what it needs and uses only fixture data already checked into `test/` (no external downloads).
 
-**Correctness regression** (`test/check_correctness.sh`, the primary check): runs `HipSTR-MT` against the same real ~1Mb chr20 fixture `make pgo` trains against (654 STR loci, 2 subsetted sample BAMs; see [Building with profile-guided optimization](#building-with-profile-guided-optimization)) and diffs the output against a committed golden VCF (`test/pgo/expected_output.vcf.gz`) using `test/compare_vcf_tolerant.py` -- a tolerant comparator that hard-fails on any genotype call change or >0.1% drift in derived statistics, but allows the sub-0.1% float noise that's inherent to floating-point summation order. This is genotyping correctness end-to-end (read filtering through haplotype alignment through genotype calling), not just one function in isolation, and it's the same tool and same tolerance used to validate this fork against unmodified upstream `gymrek-lab/HipSTR` -- see [Correctness](#hipstr-mt-changes) above, most recently confirmed with 0 discrepancies across the full 599-locus tutorial trio and a full-genome NA12891 run (1,512,240 loci).
+**Correctness regression** (`test/check_correctness.sh`, the primary check -- this is the one test a JOSS-style review will most want to see): runs `HipSTR-MT` against the same real ~1Mb chr20 fixture `make pgo` trains against (654 STR loci, 2 subsetted sample BAMs; see [Building with profile-guided optimization](#building-with-profile-guided-optimization)) at multiple `--threads` values (default: 1, 2, 4, 8, capped to the machine's core count), diffing *every* thread count's output against the same committed golden VCF (`test/pgo/expected_output.vcf.gz`) using `test/compare_vcf_tolerant.py`. That single golden-file comparison checks both things this fork's correctness claim rests on at once: that genotyping calls don't depend on thread count, and that they still match unmodified upstream `gymrek-lab/HipSTR`, which is what the golden VCF was itself validated against (see [Correctness](#hipstr-mt-changes) above, most recently confirmed with 0 discrepancies across the full 599-locus tutorial trio and a full-genome NA12891 run of 1,512,240 loci at `--threads` 1 through 64). `compare_vcf_tolerant.py` hard-fails on any genotype call change or >0.1% drift in derived statistics, but allows the sub-0.1% float noise that's inherent to floating-point summation order. Run explicit thread counts with `test/check_correctness.sh 1 16 64`.
 
 **Unit tests** (`test/*_test.cpp`, each independently buildable via `make test/<name>`):
 - **`snp_tree_test`** has a real pass/fail assertion: builds the same SNP set two ways (brute-force scan and the interval-tree structure `snp_bam_processor.cpp` actually uses) and asserts their query results agree.
@@ -235,6 +235,8 @@ HipSTR-MT utilizes phased SNP haplotypes to phase the resulting STR genotypes. T
 ![Phasing schematic!](https://raw.githubusercontent.com/tfwillems/HipSTR/master/img/phasing.png)
 
 ## Speed
+On a full hg19 genotyping run (sample NA12891/ERR194160, 1,512,240 STR loci genome-wide, dual Xeon Silver 4216, 64 logical CPUs), HipSTR-MT at `--threads 64` finishes in 24.6 minutes versus 13.3 hours for unmodified upstream HipSTR run single-threaded -- a 32.5x speedup, genotype-for-genotype identical output (see [Correctness](#hipstr-mt-changes)). That number already includes the non-parallel optimizations below (LTO, SIMD, htslib, mimalloc): even at `--threads 1`, HipSTR-MT alone is measurably faster than the original in serial. Scaling is close to linear through 16 threads (94% efficiency) and tapers off by 64 (51% efficiency) as SMT contention and serial pipeline stages start to dominate -- see the thread-scaling plots this fork's benchmark harness produces for the full runtime/speedup/memory/CPU-utilization breakdown.
+
 HipSTR-MT has built-in region-level multithreading. Use `--threads N` to set the number of Taskflow executor workers. If `--threads` is omitted, the executable selects a default from scheduler CPU allocation variables such as `SLURM_CPUS_PER_TASK`, then Linux CPU affinity, then `std::thread::hardware_concurrency()`. The pipeline keeps `4 * N` region contexts in flight so worker threads can continue genotyping while serial stages fetch the next region or flush completed output.
 
 The highest-value internal optimizations in this fork are:
@@ -246,7 +248,9 @@ The highest-value internal optimizations in this fork are:
 5. htslib 1.24 replaces a byte-at-a-time FASTA reader that ran in the pipeline's serial stage with a block-read implementation, removing a bottleneck that had capped scaling at higher thread counts (see [Dependency and I/O fixes](#dependency-and-io-fixes)).
 6. Link-time optimization and portable runtime CPU dispatch (see [Vectorization](#vectorization)) speed up the numeric hot path without requiring `-march=native` or any per-machine tuning.
 
-For larger runs, start with `--threads` near the number of physical cores available to the job and benchmark a small representative region set. If the run is still I/O-bound or SNP-phasing-bound, splitting by chromosome with `--chrom` remains useful for distributing work across multiple jobs.
+For larger runs, start with `--threads` near the number of physical cores available to the job and benchmark a small representative region set.
+
+Before `--threads` existed, the only way to parallelize the original single-threaded HipSTR was to manually split work across multiple OS processes -- `--threads N` replaces that within a single machine/process. The two options below are still useful, but now specifically for distributing work *across* separate machines/jobs (e.g. an HPC array), not as a substitute for `--threads` on one machine:
 
 Option 1: Analyze each chromosome in parallel using the **--chrom** option. For example, **--chrom chr2** will only genotype BED regions on chr2
 
@@ -309,7 +313,7 @@ python scripts/filter_haploid_vcf.py -h
 | :------- | :----------- 
 | **viz-out**       aln_viz.gz     | Output a file of each locus' alignments for visualization with VizAln or [VizAlnPdf](#aln-viz) <br> **Why? You want to visualize or inspect the STR genotypes**
 | **log**         log.txt               | Output the log information to the provided file (Default = Standard error)  
-| **threads** num_threads                | Number of Taskflow executor worker threads (Default = auto) <br> **Why? You want to override HipSTR-MT's hardware-aware default**
+| **threads** num_threads                | Number of Taskflow executor worker threads (Default = auto) <br> **Why? You want to override HipSTR-MT's hardware-aware default.** This replaces the workaround under [Speed](#speed) of manually splitting your BED file and running several original-HipSTR processes in parallel -- `--threads` does the same thing internally, in one process, with output still written in original BED order.
 | **haploid-chrs**  list_of_chroms      | Comma separated list of chromosomes to treat as haploid (Default = all diploid) <br> **Why? You're analyzing a haploid chromosome like chrY**  
 | **no-rmdup**                            | Don't remove PCR duplicates. By default, they'll be removed <br> **Why? Your sequencing data  is for PCR-amplified regions**  
 | **use-unpaired**                        | Use unpaired reads when genotyping (Default = False) <br> **Why? Your sequencing data only contains single-ended reads**  
@@ -320,6 +324,7 @@ python scripts/filter_haploid_vcf.py -h
 | **def-stutter-model**                   | For each locus, use a stutter model with PGEOM=0.9 and UP=DOWN=0.05 for in-frame artifacts and PGEOM=0.9 and UP=DOWN=0.01 for out-of-frame artifacts <br> **Why? You have too few samples for stutter estimation and don't have stutter models**  
 | **min-reads** num_reads                           | 	Minimum total reads required to genotype a locus (Default = 100) <br> **Why? Refer to the discussion [above](#data-requirements)**  
 |**output-filters**                        | Write why individual calls were filtered to the VCF (Default = False)
+| **output-hap-fields**                    | Write extra `LFLANKS`/`RFLANKS`/`HQ`/`PHQ`/`LFGT`/`RFGT` FORMAT fields describing each sample's full assembled haplotypes, not just the STR portion (Default = False) <br> **Why? You want to inspect or debug the flanking-sequence alignment, not just the STR genotype**
 
 
 This list is comprised of the most useful and frequently used additional options, but is not all encompassing. For a complete list of options, please type
