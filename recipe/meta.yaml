@@ -5,15 +5,8 @@ package:
   version: {{ version }}
 
 source:
-  # TODO: no GitHub release/tag exists yet for this fork (checked via the
-  # GitHub API: 0 releases, 0 tags as of 2026-08-26). Bioconda requires a
-  # pinned, immutable source archive, not a moving branch HEAD -- cut a
-  # release first (e.g. `git tag v{{ version }}` matching src/version.cpp,
-  # push the tag, then draft a GitHub Release from it), then replace the
-  # url/sha256 below with the real release tarball and its checksum
-  # (`curl -sL <url> | sha256sum`).
   url: https://github.com/TurakhiaLab/HipSTR-MT/archive/refs/tags/v{{ version }}.tar.gz
-  sha256: REPLACE_ME_AFTER_CUTTING_v{{ version }}_RELEASE
+  sha256: ac3c65dfade0c8c9b8c91c776baef29789e17060b5c08da9ca808875d1f55ad2
 
 build:
   number: 0
