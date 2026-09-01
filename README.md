@@ -86,7 +86,7 @@ First, `make pgo` compiles an instrumented `HipSTR-MT`. Then it trains that prog
 **Caution: do not use `make pgo` at this time.** On GCC 11.4 and GCC 13.1, `make pgo` makes a binary that is 5-7% *slower* than the binary from the usual `make`. An unwanted interaction between `-fprofile-use` and `-flto=auto` causes this decrease in speed. Refer to the PGO section of the Makefile for more data. Use the usual `make` until this interaction has a solution.
 
 ### Conda/Bioconda
-A draft recipe is in [recipe/](recipe/meta.yaml) for a subsequent submission to [bioconda-recipes](https://github.com/bioconda/bioconda-recipes). The recipe uses the source tarball of the v0.6.2 release, and it contains the sha256 checksum of that tarball. But nobody has sent the recipe to Bioconda yet. Until the recipe is available there, build the program from the source as above.
+A draft recipe is in [recipe/](recipe/meta.yaml) for a subsequent submission to [bioconda-recipes](https://github.com/bioconda/bioconda-recipes). The recipe uses the source tarball of the applicable release. The recipe does not contain the sha256 checksum of that tarball, because a tarball cannot contain its own checksum. The GitHub Release notes of each tag give the checksum, and the recipe shows the command that calculates it again. You must add the checksum when you copy the recipe into a bioconda-recipes pull request. Nobody has sent the recipe to Bioconda yet. Until the recipe is available there, build the program from the source as above.
 
 ## Testing
     test/run_tests.sh

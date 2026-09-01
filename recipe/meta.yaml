@@ -1,4 +1,4 @@
-{% set version = "0.6.2" %}
+{% set version = "0.6.3" %}
 
 package:
   name: hipstr-mt
@@ -6,7 +6,13 @@ package:
 
 source:
   url: https://github.com/TurakhiaLab/HipSTR-MT/archive/refs/tags/v{{ version }}.tar.gz
-  sha256: ac3c65dfade0c8c9b8c91c776baef29789e17060b5c08da9ca808875d1f55ad2
+  # A tarball cannot contain its own checksum: GitHub generates this archive
+  # from the tagged tree, so any commit that writes the hash here changes the
+  # tree and invalidates the value it just wrote. Fill this in when copying the
+  # recipe into a bioconda-recipes PR -- the hash is published in the GitHub
+  # Release notes for the matching tag, or recompute it with:
+  #   curl -sL https://github.com/TurakhiaLab/HipSTR-MT/archive/refs/tags/v{{ version }}.tar.gz | sha256sum
+  sha256: REPLACE_AT_SUBMISSION_TIME
 
 build:
   number: 0
