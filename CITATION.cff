@@ -1,0 +1,51 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the original HipSTR paper and this fork."
+type: software
+title: HipSTR-MT
+abstract: >-
+  A performance fork of HipSTR that adds thread-level parallelization, memory
+  and vectorization optimizations, and an upgraded vendored htslib, while
+  producing genotype-identical output to upstream HipSTR at any thread count.
+version: 0.6.4
+date-released: "2026-09-03"
+license: GPL-2.0-only
+repository-code: "https://github.com/TurakhiaLab/HipSTR-MT"
+url: "https://github.com/TurakhiaLab/HipSTR-MT"
+keywords:
+  - short tandem repeats
+  - STR genotyping
+  - bioinformatics
+  - parallel computing
+  - population genetics
+authors:
+  - family-names: Galil
+    given-names: Joachim
+    orcid: "https://orcid.org/0009-0000-2060-2074"
+    affiliation: "Department of Electrical and Computer Engineering, University of California San Diego"
+  - family-names: Gymrek
+    given-names: Melissa
+    orcid: "https://orcid.org/0000-0002-6086-3903"
+    affiliation: "Department of Medicine, University of California San Diego"
+  - family-names: Turakhia
+    given-names: Yatish
+    orcid: "https://orcid.org/0000-0001-5600-2900"
+    affiliation: "Department of Electrical and Computer Engineering, University of California San Diego"
+references:
+  - type: article
+    title: "Genome-wide profiling of heritable and de novo STR variations"
+    doi: 10.1038/nmeth.4267
+    year: 2017
+    journal: Nature Methods
+    authors:
+      - family-names: Willems
+        given-names: Thomas
+      - family-names: Zielinski
+        given-names: Dina
+      - family-names: Yuan
+        given-names: Jie
+      - family-names: Gordon
+        given-names: Assaf
+      - family-names: Gymrek
+        given-names: Melissa
+      - family-names: Erlich
+        given-names: Yaniv

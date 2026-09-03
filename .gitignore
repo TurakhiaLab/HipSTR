@@ -31,3 +31,4 @@ lib/mimalloc/build/
 lib/mimalloc/cmake_local/
 lib/libdeflate/build/
 .codex
+preview.html

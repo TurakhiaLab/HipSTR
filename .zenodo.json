@@ -1,0 +1,45 @@
+{
+  "upload_type": "software",
+  "title": "HipSTR-MT: A Multi-threaded Extension of HipSTR for Scalable Short Tandem Repeat Genotyping",
+  "description": "<p>HipSTR-MT is a performance fork of HipSTR, the haplotype-based short tandem repeat (STR) genotyper for Illumina sequencing data. It restructures HipSTR's serial per-region loop into a three-stage concurrent pipeline built on the Taskflow task-graph framework, adds thread-safety fixes, memory and vectorization optimizations, and an upgraded vendored htslib, while producing genotype-identical output to the upstream tool at any thread count. On a whole-genome run of 1,512,240 STR loci it reduces wall-clock time from 13.3 hours to 24.6 minutes at 64 threads, a 32.5x speedup.</p>",
+  "creators": [
+    {
+      "name": "Galil, Joachim",
+      "affiliation": "Department of Electrical and Computer Engineering, University of California San Diego, San Diego, CA, USA",
+      "orcid": "0009-0000-2060-2074"
+    },
+    {
+      "name": "Gymrek, Melissa",
+      "affiliation": "Department of Medicine, University of California San Diego, San Diego, CA, USA",
+      "orcid": "0000-0002-6086-3903"
+    },
+    {
+      "name": "Turakhia, Yatish",
+      "affiliation": "Department of Electrical and Computer Engineering, University of California San Diego, San Diego, CA, USA",
+      "orcid": "0000-0001-5600-2900"
+    }
+  ],
+  "license": "GPL-2.0-only",
+  "access_right": "open",
+  "keywords": [
+    "short tandem repeats",
+    "STR genotyping",
+    "bioinformatics",
+    "parallel computing",
+    "multithreading",
+    "population genetics",
+    "C++"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/TurakhiaLab/HipSTR-MT",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "10.1038/nmeth.4267",
+      "relation": "isDerivedFrom",
+      "scheme": "doi"
+    }
+  ]
+}
