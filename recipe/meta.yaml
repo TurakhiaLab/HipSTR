@@ -57,7 +57,7 @@ about:
     Thomas Willems et al. It produces the same genotype calls as upstream
     HipSTR at any thread count -- see the README's Testing and Correctness
     sections -- while running substantially faster on multi-core machines.
-  doc_url: https://github.com/TurakhiaLab/HipSTR-MT/blob/development/README.md
+  doc_url: https://github.com/TurakhiaLab/HipSTR-MT/blob/main/README.md
 
 extra:
   recipe-maintainers:
