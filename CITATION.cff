@@ -7,6 +7,14 @@ abstract: >-
   and vectorization optimizations, and an upgraded vendored htslib, while
   producing genotype-identical output to upstream HipSTR at any thread count.
 version: 0.6.5
+doi: 10.5281/zenodo.22650334
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22650334
+    description: Concept DOI, always resolving to the latest version
+  - type: doi
+    value: 10.5281/zenodo.22650335
+    description: DOI of version 0.6.5
 date-released: "2026-09-07"
 license: GPL-2.0-only
 repository-code: "https://github.com/TurakhiaLab/HipSTR-MT"

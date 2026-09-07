@@ -1,6 +1,7 @@
 # HipSTR-MT
 **H**aplotype **i**nference and **p**hasing for **S**hort **T**andem **R**epeats  
 ![HipSTR icon!](https://raw.githubusercontent.com/tfwillems/HipSTR/master/img/HipSTR_icon_small.png)
+[![DOI](https://zenodo.org/badge/1273590821.svg)](https://doi.org/10.5281/zenodo.22650334)
 
 #### Author: Thomas Willems <hipstrtool@gmail.com>
 
@@ -552,7 +553,10 @@ If you have a question about the genotyping model or the algorithm, which this f
     ii. Send an email to hipstrtool@gmail.com
 
 ## Citation
-If HipSTR-MT was useful for your work, cite these two publications:
+If HipSTR-MT was useful for your work, cite these publications:
 
 - The initial HipSTR manuscript: **[Genome-wide profiling of heritable and de novo STR variations](https://www.nature.com/articles/nmeth.4267)**
-- The Journal of Open Source Software (JOSS) paper of this fork, which gives the parallelization and the performance work. We will add the citation and the DOI here after the publication. Until then, cite this repository directly: https://github.com/TurakhiaLab/HipSTR-MT
+- The software archive of this fork: Zenodo, [10.5281/zenodo.22650334](https://doi.org/10.5281/zenodo.22650334). This DOI always points to the most recent version. The Zenodo page of each release also gives a DOI for that one version.
+- The Journal of Open Source Software (JOSS) paper of this fork, which gives the parallelization and the performance work. We will add the citation and the DOI here after the publication.
+
+The [CITATION.cff](CITATION.cff) file gives the same data in a machine-readable format. The "Cite this repository" button on the GitHub page uses it.
