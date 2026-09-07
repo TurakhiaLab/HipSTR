@@ -1,6 +1,6 @@
 {
   "upload_type": "software",
-  "title": "HipSTR-MT: A Multi-threaded Extension of HipSTR for Scalable Short Tandem Repeat Genotyping",
+  "title": "HipSTR-MT: A Multi-threaded Extension of HipSTR for Faster Short Tandem Repeat Genotyping",
   "description": "<p>HipSTR-MT is a performance fork of HipSTR, the haplotype-based short tandem repeat (STR) genotyper for Illumina sequencing data. It restructures HipSTR's serial per-region loop into a three-stage concurrent pipeline built on the Taskflow task-graph framework, adds thread-safety fixes, memory and vectorization optimizations, and an upgraded vendored htslib, while producing genotype-identical output to the upstream tool at any thread count. On a whole-genome run of 1,512,240 STR loci it reduces wall-clock time from 13.3 hours to 24.6 minutes at 64 threads, a 32.5x speedup.</p>",
   "creators": [
     {

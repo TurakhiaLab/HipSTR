@@ -32,3 +32,12 @@ lib/mimalloc/cmake_local/
 lib/libdeflate/build/
 .codex
 preview.html
+
+# Benchmark baseline binaries and profiling output (kept locally, not tracked)
+HipSTR_bgzfmt
+HipSTR_float_baseline
+HipSTR_lockfix
+HipSTR_mimalloc_v2_baseline
+HipSTR_prelockfix
+test/gmon.out
+diff.txt
