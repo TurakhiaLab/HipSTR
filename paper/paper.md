@@ -55,7 +55,7 @@ The unit of work is the genomic region: regions are independent under HipSTR's m
 
 Treating that comparability as a hard constraint drove two trade-offs. Multiply-add contraction is disabled (`-ffp-contract=off`), giving up vectorization headroom to keep results bit-identical across instruction sets, since silent numerical divergence would make the fork unusable as a drop-in replacement. Each worker also keeps four region contexts in flight, with independent reader and alignment state, so the work-stealing scheduler can hide I/O and memory latency; this raises peak memory from ~1.6 GB to ~8 GB at 64 threads, favoring wall-clock time on machines where cores are scarcer than RAM.
 
-Thread safety required eliminating two pieces of shared mutable state: `StutterAlignerClass`'s scratch buffers, moved into a per-`HapAligner` workspace, and the non-reentrant Cephes `bdtr` function, now mutex-guarded. Further optimizations include a shared chromosome cache, mimalloc [@leijen2019], an htslib upgrade, and SIMD dispatch via compiler target clones — improve single-threaded performance as well. Three additive flags extend the CLI without breaking backward compatibility.
+Thread safety required eliminating two pieces of shared mutable state: `StutterAlignerClass`'s scratch buffers, moved into a per-`HapAligner` workspace, and the non-reentrant Cephes `bdtr` function, now mutex-guarded. Further optimizations include a shared chromosome cache, mimalloc [@leijen2019], an htslib upgrade, and SIMD dispatch via compiler target clones — improving single-threaded performance as well. Three additive flags extend the CLI without breaking backward compatibility.
 
 | Category | Change | Effect |
 |---|---|---|
