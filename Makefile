@@ -9,14 +9,43 @@
 ## `make pgo` is also available (see the PGO section below) but is currently
 ## measured slower than a plain build on this toolchain -- not recommended.
 
+## Probe whether this toolchain can both emit AND link glibc's vector exp.
+## Testing for -lmvec alone is not enough: mathops.cpp's "#pragma omp declare
+## simd" is what makes GCC emit _ZGVbN2v_exp and friends, and it does so
+## whenever -fopenmp-simd is on, whether or not libmvec exists in the target
+## sysroot -- so a missing library surfaces as undefined references at link
+## time rather than as a missing -l. The probe therefore compiles and links a
+## loop that actually goes through that path, and both halves are enabled
+## together or not at all. glibc only gained libmvec in 2.22, and conda-forge's
+## default 2.17 sysroot ships none, which is the case this exists to handle.
+## _Pragma is used rather than "#pragma" because a literal # would start a
+## comment here.
+HAVE_LIBMVEC := $(shell printf '%s\n' \
+	'_Pragma("omp declare simd notinbranch") extern "C" double exp(double);' \
+	'double f(const double* a, long n){ double s = 0;' \
+	'_Pragma("omp simd reduction(+:s)")' \
+	'for (long i = 0; i < n; i++) s += exp(a[i]); return s; }' \
+	'int main(){ return 0; }' \
+	| $(CXX) -x c++ -O2 -fopenmp-simd - -lmvec -o /dev/null 2>/dev/null && echo yes)
+
+ifeq ($(HAVE_LIBMVEC),yes)
+SIMD_MATH_FLAGS := -fopenmp-simd -DHAVE_LIBMVEC
+MVEC_LIB        := -lmvec
+else
+SIMD_MATH_FLAGS :=
+MVEC_LIB        :=
+endif
+
 ## Default compilation flags.
 ## Override with:
 ##   make CXXFLAGS=XXXXX
 ## -flto=auto enables link-time optimization across all translation units.
-## -fopenmp-simd enables recognition of "#pragma omp simd"/"declare simd"
-## (mathops.cpp uses it to vectorize log_sum_exp's reduction via libmvec's
-## vector exp -- see -lmvec below). It does not pull in libgomp or any
-## OpenMP runtime; Taskflow remains the only threading in this codebase.
+## $(SIMD_MATH_FLAGS) carries -fopenmp-simd, which enables recognition of
+## "#pragma omp simd"/"declare simd" (mathops.cpp uses it to vectorize
+## log_sum_exp's reduction via libmvec's vector exp), plus the matching
+## -DHAVE_LIBMVEC -- see the probe above for why they move together. It does
+## not pull in libgomp or any OpenMP runtime; Taskflow remains the only
+## threading in this codebase.
 ## The leading $(CXXFLAGS) keeps whatever the environment already set, instead
 ## of discarding it. A plain `=` assignment takes precedence over the
 ## environment in GNU Make, which silently dropped the flags that packaging
@@ -28,7 +57,7 @@
 ## `:=` is required here: a recursive `=` that refers to itself is an infinite
 ## recursion error. Overriding on the command line (`make CXXFLAGS=...`) still
 ## wins over both, as documented above.
-CXXFLAGS := $(CXXFLAGS) -O3 -g -flto=auto -fopenmp-simd -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
+CXXFLAGS := $(CXXFLAGS) -O3 -g -flto=auto $(SIMD_MATH_FLAGS) -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
 
 ## To create a static distribution file, run:
 ##   make static-dist
@@ -68,13 +97,8 @@ MIMALLOC_LIB  = $(MIMALLOC_ROOT)/build/libmimalloc.a
 LIBDEFLATE_ROOT = lib/libdeflate
 LIBDEFLATE_LIB  = $(LIBDEFLATE_ROOT)/build/libdeflate.a
 
-# glibc's libmvec (the vector math library backing log_sum_exp's -fopenmp-simd
-# exp reduction) was only added in glibc 2.22, so probe for it rather than
-# hardcoding -lmvec. conda-forge/Bioconda builds default to a glibc 2.17
-# sysroot, where the library does not exist -- GCC correspondingly emits no
-# vector-math calls there, making the link both impossible and unnecessary.
-MVEC_LIB := $(shell echo 'int main(){return 0;}' | $(CXX) -x c++ - -lmvec -o /dev/null 2>/dev/null && echo -lmvec)
-
+# $(MVEC_LIB) is -lmvec, or empty when the probe near the top of this file
+# found the toolchain cannot use glibc's vector exp -- see it for details.
 LIBS = -L./ -lm $(MVEC_LIB) -L$(HTSLIB_ROOT)/ -lz -lcurl -lcrypto -L$(CEPHES_ROOT)/ -llzma -lbz2 $(LIBDEFLATE_LIB) -Wl,--whole-archive $(MIMALLOC_LIB) -Wl,--no-whole-archive
 INCLUDE   = -Ilib -Ilib/htslib -Itaskflow -I$(MIMALLOC_ROOT)/include -I$(LIBDEFLATE_ROOT)
 CEPHES_LIB        = lib/cephes/libprob.a

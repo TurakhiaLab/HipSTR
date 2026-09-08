@@ -11,8 +11,18 @@
 // correctly-rounded algorithm as scalar exp(), just batched -- not an
 // approximation, unlike fast_log_sum_exp's fasterexp() below. Requires
 // -fopenmp-simd (Makefile) and -lmvec (LIBS); pulls in no OpenMP runtime.
+//
+// This declaration is what makes GCC emit calls to libmvec's vector exp
+// (_ZGVbN2v_exp and friends), so it has to be gated on libmvec actually being
+// available: glibc only gained it in 2.22, and declaring the simd variant
+// without the library present fails the link on undefined references rather
+// than falling back to scalar. The Makefile probes for it and defines
+// HAVE_LIBMVEC (alongside -fopenmp-simd) only when both halves work. Without
+// it the loop below stays scalar, which is slower but correct.
+#ifdef HAVE_LIBMVEC
 #pragma omp declare simd notinbranch
 extern "C" double exp(double);
+#endif
 
 const double LOG_ONE_HALF  = log(0.5);
 const double TOLERANCE     = 1e-10;
