@@ -212,14 +212,19 @@ test/vcf_snp_tree_test: test/vcf_snp_tree_test.cpp src/error.cpp src/snp_tree.cp
 %.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(INCLUDE) -MMD -MP -o $@ -c $<
 
-# Rebuild CEPHES library if needed
+# Rebuild CEPHES library if needed.
+# CC is forwarded on the command line because lib/cephes/Makefile hardcodes
+# `CC = gcc`, and a makefile assignment beats the environment in GNU Make --
+# so without this it ignores $CC and demands a compiler literally named gcc,
+# which cross-compiling toolchains (conda-build's among them) do not provide.
+# A command-line assignment outranks the sub-makefile's own. Same for htslib.
 $(CEPHES_LIB):
-	cd lib/cephes && $(MAKE)
+	cd lib/cephes && $(MAKE) CC="$(CC)"
 
 # Rebuild htslib library if needed. Needs libdeflate built first so its
 # header/lib are present for HAVE_LIBDEFLATE (see lib/htslib/config.h).
 $(HTSLIB_LIB): $(LIBDEFLATE_LIB)
-	cd lib/htslib && $(MAKE) lib-static CPPFLAGS="$(CPPFLAGS) -I$(CURDIR)/$(LIBDEFLATE_ROOT) -DHAVE_LIBDEFLATE"
+	cd lib/htslib && $(MAKE) lib-static CC="$(CC)" CPPFLAGS="$(CPPFLAGS) -I$(CURDIR)/$(LIBDEFLATE_ROOT) -DHAVE_LIBDEFLATE"
 
 # ====================================================================
 # 5b. THE BUILD RECIPE FOR LIBDEFLATE (vendored; CMake-only upstream build)
