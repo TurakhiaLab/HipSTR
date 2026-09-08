@@ -17,14 +17,23 @@
 ## (mathops.cpp uses it to vectorize log_sum_exp's reduction via libmvec's
 ## vector exp -- see -lmvec below). It does not pull in libgomp or any
 ## OpenMP runtime; Taskflow remains the only threading in this codebase.
-CXXFLAGS= -O3 -g -flto=auto -fopenmp-simd -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
+## The leading $(CXXFLAGS) keeps whatever the environment already set, instead
+## of discarding it. A plain `=` assignment takes precedence over the
+## environment in GNU Make, which silently dropped the flags that packaging
+## toolchains rely on -- conda-build passes `-isystem $PREFIX/include` and
+## `-L$PREFIX/lib -Wl,-rpath,$PREFIX/lib` this way to point the build at its own
+## zlib/bzip2/xz/libcurl/openssl. The environment's flags go first so that this
+## project's own settings win where the two conflict (conda-build passes -O2;
+## later flags beat earlier ones in GCC, so -O3 below has to come after it).
+## `:=` is required here: a recursive `=` that refers to itself is an infinite
+## recursion error. Overriding on the command line (`make CXXFLAGS=...`) still
+## wins over both, as documented above.
+CXXFLAGS := $(CXXFLAGS) -O3 -g -flto=auto -fopenmp-simd -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
 
 ## To create a static distribution file, run:
 ##   make static-dist
 ifeq ($(STATIC),1)
-LDFLAGS=-static 
-else
-LDFLAGS= 
+LDFLAGS := -static $(LDFLAGS)
 endif
 
 ## Source code files, add new files to this list
@@ -59,7 +68,14 @@ MIMALLOC_LIB  = $(MIMALLOC_ROOT)/build/libmimalloc.a
 LIBDEFLATE_ROOT = lib/libdeflate
 LIBDEFLATE_LIB  = $(LIBDEFLATE_ROOT)/build/libdeflate.a
 
-LIBS = -L./ -lm -lmvec -L$(HTSLIB_ROOT)/ -lz -lcurl -lcrypto -L$(CEPHES_ROOT)/ -llzma -lbz2 $(LIBDEFLATE_LIB) -Wl,--whole-archive $(MIMALLOC_LIB) -Wl,--no-whole-archive
+# glibc's libmvec (the vector math library backing log_sum_exp's -fopenmp-simd
+# exp reduction) was only added in glibc 2.22, so probe for it rather than
+# hardcoding -lmvec. conda-forge/Bioconda builds default to a glibc 2.17
+# sysroot, where the library does not exist -- GCC correspondingly emits no
+# vector-math calls there, making the link both impossible and unnecessary.
+MVEC_LIB := $(shell echo 'int main(){return 0;}' | $(CXX) -x c++ - -lmvec -o /dev/null 2>/dev/null && echo -lmvec)
+
+LIBS = -L./ -lm $(MVEC_LIB) -L$(HTSLIB_ROOT)/ -lz -lcurl -lcrypto -L$(CEPHES_ROOT)/ -llzma -lbz2 $(LIBDEFLATE_LIB) -Wl,--whole-archive $(MIMALLOC_LIB) -Wl,--no-whole-archive
 INCLUDE   = -Ilib -Ilib/htslib -Itaskflow -I$(MIMALLOC_ROOT)/include -I$(LIBDEFLATE_ROOT)
 CEPHES_LIB        = lib/cephes/libprob.a
 HTSLIB_LIB        = $(HTSLIB_ROOT)/libhts.a
@@ -194,7 +210,7 @@ test/vcf_snp_tree_test: test/vcf_snp_tree_test.cpp src/error.cpp src/snp_tree.cp
 
 # Build each object file independently
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -o $@ -c $<
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(INCLUDE) -MMD -MP -o $@ -c $<
 
 # Rebuild CEPHES library if needed
 $(CEPHES_LIB):
@@ -203,7 +219,7 @@ $(CEPHES_LIB):
 # Rebuild htslib library if needed. Needs libdeflate built first so its
 # header/lib are present for HAVE_LIBDEFLATE (see lib/htslib/config.h).
 $(HTSLIB_LIB): $(LIBDEFLATE_LIB)
-	cd lib/htslib && $(MAKE) lib-static CPPFLAGS="-I$(CURDIR)/$(LIBDEFLATE_ROOT) -DHAVE_LIBDEFLATE"
+	cd lib/htslib && $(MAKE) lib-static CPPFLAGS="$(CPPFLAGS) -I$(CURDIR)/$(LIBDEFLATE_ROOT) -DHAVE_LIBDEFLATE"
 
 # ====================================================================
 # 5b. THE BUILD RECIPE FOR LIBDEFLATE (vendored; CMake-only upstream build)
