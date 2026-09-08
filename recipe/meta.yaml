@@ -20,8 +20,7 @@ build:
   # decided at runtime via cpuid, but the build itself assumes x86_64 (SSE2/
   # AVX intrinsics used directly elsewhere) and Linux (/proc/self/status,
   # sched_getaffinity -- see README's Requirements section).
-  skip: True  # [not linux]
-  skip: True  # [not x86_64]
+  skip: True  # [not (linux and x86_64)]
 
 requirements:
   build:
