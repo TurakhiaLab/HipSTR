@@ -13,8 +13,11 @@ identifiers:
     value: 10.5281/zenodo.22650334
     description: Concept DOI, always resolving to the latest version
   # Zenodo mints the version-specific DOI when it archives the release, so it
-  # cannot be recorded in the tagged tree that produces that archive. Add the
-  # 0.6.6 version DOI here once Zenodo has issued it.
+  # is added after the fact: the tagged tree that produces the archive cannot
+  # contain it.
+  - type: doi
+    value: 10.5281/zenodo.22655008
+    description: DOI of version 0.6.6
 date-released: "2026-09-08"
 license: GPL-2.0-only
 repository-code: "https://github.com/TurakhiaLab/HipSTR-MT"
