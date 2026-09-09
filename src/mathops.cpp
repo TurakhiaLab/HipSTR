@@ -115,11 +115,23 @@ double fast_log_sum_exp(double log_v1, double log_v2){
   }
 }
 
-// Sums fasterexp(*iter - max_val) over [begin, end), 4 elements at a time using
-// the SSE-vectorized vfasterexp() already vendored in fastonebigheader.h (previously
-// unused). Each lane's diff is computed in double precision and narrowed to float
-// immediately before the exp call, matching the scalar path's rounding exactly, so
-// this is not an approximation of the scalar loop -- it's the same computation batched.
+// Sums fasterexp(*iter - max_val) over [begin, end), evaluating the exp four
+// elements at a time with the SSE-vectorized vfasterexp() already vendored in
+// fastonebigheader.h (previously unused). Each lane's diff is computed in
+// double precision and narrowed to float immediately before the exp call, and
+// vfasterexp() is bit-identical to scalar fasterexp() lane for lane, so the
+// exp evaluation itself is exactly the scalar computation, batched.
+//
+// The accumulator, however, must stay double and must add in scalar order.
+// An earlier version accumulated into a v4sf, i.e. in single precision and
+// lane-wise, then widened the four lanes at the end. That was NOT equivalent:
+// it differed from the scalar loop in the large majority of realistic inputs,
+// by up to ~5e-7 relative -- single-precision epsilon. Small as that is, it is
+// enough to flip near-degenerate alignment paths, and it changed the alleles
+// discovered at a homopolymer locus (chr2:33759762 on NA12892) relative to
+// upstream HipSTR. Adding each lane into a double in the original order keeps
+// this bit-identical to the scalar path while retaining the vectorized exp;
+// verified over 40k randomized arrays across a range of value spreads.
 //
 // The >LOG_THRESH decision is made in double precision, from the same ddiffN
 // values used for the scalar tail below -- comparing the float-narrowed diff
@@ -129,21 +141,19 @@ double fast_log_sum_exp(double log_v1, double log_v2){
 #ifdef __SSE2__
 __attribute__((optimize("-ffp-contract=off")))
 static inline double fast_exp_sum(const double* begin, const double* end, double max_val){
-  v4sf acc = v4sfl(0.0f);
+  double total = 0.0;
   const double* iter = begin;
   for (; iter + 4 <= end; iter += 4){
     double ddiff0 = iter[0] - max_val, ddiff1 = iter[1] - max_val;
     double ddiff2 = iter[2] - max_val, ddiff3 = iter[3] - max_val;
     float diffs[4] = { (float) ddiff0, (float) ddiff1, (float) ddiff2, (float) ddiff3 };
-    unsigned int mbits[4] = { ddiff0 > LOG_THRESH ? 0xFFFFFFFFu : 0u, ddiff1 > LOG_THRESH ? 0xFFFFFFFFu : 0u,
-                               ddiff2 > LOG_THRESH ? 0xFFFFFFFFu : 0u, ddiff3 > LOG_THRESH ? 0xFFFFFFFFu : 0u };
-    v4sf d    = _mm_loadu_ps(diffs);
-    v4sf mask = _mm_loadu_ps((const float*) mbits);
-    acc = acc + _mm_and_ps(mask, vfasterexp(d));
+    float exps[4];
+    _mm_storeu_ps(exps, vfasterexp(_mm_loadu_ps(diffs)));
+    if (ddiff0 > LOG_THRESH) total += exps[0];
+    if (ddiff1 > LOG_THRESH) total += exps[1];
+    if (ddiff2 > LOG_THRESH) total += exps[2];
+    if (ddiff3 > LOG_THRESH) total += exps[3];
   }
-  float lanes[4];
-  _mm_storeu_ps(lanes, acc);
-  double total = (double) lanes[0] + (double) lanes[1] + (double) lanes[2] + (double) lanes[3];
   for (; iter != end; iter++){
     double diff = *iter - max_val;
     if (diff > LOG_THRESH)
