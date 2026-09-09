@@ -6,7 +6,7 @@ abstract: >-
   A performance fork of HipSTR that adds thread-level parallelization, memory
   and vectorization optimizations, and an upgraded vendored htslib, while
   producing genotype-identical output to upstream HipSTR at any thread count.
-version: 0.6.7
+version: 0.6.8
 doi: 10.5281/zenodo.22650334
 identifiers:
   - type: doi
@@ -14,11 +14,9 @@ identifiers:
     description: Concept DOI, always resolving to the latest version
   # Zenodo mints the version-specific DOI when it archives the release, so it
   # is added after the fact: the tagged tree that produces the archive cannot
-  # contain it.
-  - type: doi
-    value: 10.5281/zenodo.22655642
-    description: DOI of version 0.6.7
-date-released: "2026-09-08"
+  # contain it. Add the 0.6.8 version DOI here once Zenodo has issued it.
+  # (Version 0.6.7 was 10.5281/zenodo.22655642.)
+date-released: "2026-09-09"
 license: GPL-2.0-only
 repository-code: "https://github.com/TurakhiaLab/HipSTR-MT"
 url: "https://github.com/TurakhiaLab/HipSTR-MT"
