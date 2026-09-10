@@ -11,8 +11,18 @@
 // correctly-rounded algorithm as scalar exp(), just batched -- not an
 // approximation, unlike fast_log_sum_exp's fasterexp() below. Requires
 // -fopenmp-simd (Makefile) and -lmvec (LIBS); pulls in no OpenMP runtime.
+//
+// This declaration is what makes GCC emit calls to libmvec's vector exp
+// (_ZGVbN2v_exp and friends), so it has to be gated on libmvec actually being
+// available: glibc only gained it in 2.22, and declaring the simd variant
+// without the library present fails the link on undefined references rather
+// than falling back to scalar. The Makefile probes for it and defines
+// HAVE_LIBMVEC (alongside -fopenmp-simd) only when both halves work. Without
+// it the loop below stays scalar, which is slower but correct.
+#ifdef HAVE_LIBMVEC
 #pragma omp declare simd notinbranch
 extern "C" double exp(double);
+#endif
 
 const double LOG_ONE_HALF  = log(0.5);
 const double TOLERANCE     = 1e-10;
@@ -105,35 +115,61 @@ double fast_log_sum_exp(double log_v1, double log_v2){
   }
 }
 
-// Sums fasterexp(*iter - max_val) over [begin, end), 4 elements at a time using
-// the SSE-vectorized vfasterexp() already vendored in fastonebigheader.h (previously
-// unused). Each lane's diff is computed in double precision and narrowed to float
-// immediately before the exp call, matching the scalar path's rounding exactly, so
-// this is not an approximation of the scalar loop -- it's the same computation batched.
+// Sums fasterexp(*iter - max_val) over [begin, end), evaluating the exp four
+// elements at a time with the SSE-vectorized vfasterexp() already vendored in
+// fastonebigheader.h (previously unused). Each lane's diff is computed in
+// double precision and narrowed to float immediately before the exp call, and
+// vfasterexp() is bit-identical to scalar fasterexp() lane for lane, so the
+// exp evaluation itself is exactly the scalar computation, batched.
 //
-// The >LOG_THRESH decision is made in double precision, from the same ddiffN
-// values used for the scalar tail below -- comparing the float-narrowed diff
-// instead (as an earlier version of this did) can flip right at the boundary,
-// since a diff just above LOG_THRESH in double can round to float and land at
-// or below the float-narrowed threshold, silently dropping that term.
+// The accumulator, however, must stay double and must add in scalar order.
+// An earlier version accumulated into a v4sf, i.e. in single precision and
+// lane-wise, then widened the four lanes at the end. That was NOT equivalent:
+// it differed from the scalar loop in the large majority of realistic inputs,
+// by up to ~5e-7 relative -- single-precision epsilon. Small as that is, it is
+// enough to flip near-degenerate alignment paths, and it changed the alleles
+// discovered at a homopolymer locus (chr2:33759762 on NA12892) relative to
+// upstream HipSTR. Adding each lane into a double in the original order keeps
+// this bit-identical to the scalar path while retaining the vectorized exp;
+// verified over 50k randomized arrays across a range of value spreads, array
+// lengths, and tail sizes. The test/homopolymer fixture pins that locus so
+// this cannot regress silently again.
+//
+// The double accumulator's serial add chain is not what this function spends
+// its time on; branching per lane is. Masking each excluded lane to an exact
+// +0.0 and adding all four unconditionally is bit-identical -- x + 0.0 is
+// exact, and the running total is never negative -- and it removes those four
+// branches. The diffs and the threshold mask are computed in SIMD for the same
+// reason, leaving only the four ordered double adds as scalar work. Measured
+// against a version that keeps the (wrong) single-precision accumulator, this
+// costs ~8%, where testing each lane individually cost ~200%; it remains 3.3x
+// faster than the fully scalar loop.
+//
+// The >LOG_THRESH decision is made in double precision (_mm_cmpgt_pd on the
+// unnarrowed diffs), matching the scalar tail below. Comparing the
+// float-narrowed diff instead (as an earlier version of this did) can flip
+// right at the boundary, since a diff just above LOG_THRESH in double can
+// round to float and land at or below the float-narrowed threshold, silently
+// dropping that term. Each 64-bit compare result is all-ones or all-zeros, so
+// either 32-bit half of it serves as that lane's float mask; the shuffle takes
+// the high half of each.
 #ifdef __SSE2__
 __attribute__((optimize("-ffp-contract=off")))
 static inline double fast_exp_sum(const double* begin, const double* end, double max_val){
-  v4sf acc = v4sfl(0.0f);
+  double total = 0.0;
   const double* iter = begin;
+  const __m128d vmax = _mm_set1_pd(max_val), vthresh = _mm_set1_pd(LOG_THRESH);
   for (; iter + 4 <= end; iter += 4){
-    double ddiff0 = iter[0] - max_val, ddiff1 = iter[1] - max_val;
-    double ddiff2 = iter[2] - max_val, ddiff3 = iter[3] - max_val;
-    float diffs[4] = { (float) ddiff0, (float) ddiff1, (float) ddiff2, (float) ddiff3 };
-    unsigned int mbits[4] = { ddiff0 > LOG_THRESH ? 0xFFFFFFFFu : 0u, ddiff1 > LOG_THRESH ? 0xFFFFFFFFu : 0u,
-                               ddiff2 > LOG_THRESH ? 0xFFFFFFFFu : 0u, ddiff3 > LOG_THRESH ? 0xFFFFFFFFu : 0u };
-    v4sf d    = _mm_loadu_ps(diffs);
-    v4sf mask = _mm_loadu_ps((const float*) mbits);
-    acc = acc + _mm_and_ps(mask, vfasterexp(d));
+    __m128d lo = _mm_sub_pd(_mm_loadu_pd(iter),     vmax);
+    __m128d hi = _mm_sub_pd(_mm_loadu_pd(iter + 2), vmax);
+    v4sf diffs = _mm_movelh_ps(_mm_cvtpd_ps(lo), _mm_cvtpd_ps(hi));
+    v4sf mask  = _mm_shuffle_ps(_mm_castpd_ps(_mm_cmpgt_pd(lo, vthresh)),
+                                _mm_castpd_ps(_mm_cmpgt_pd(hi, vthresh)),
+                                _MM_SHUFFLE(3,1,3,1));
+    float exps[4];
+    _mm_storeu_ps(exps, _mm_and_ps(mask, vfasterexp(diffs)));
+    total += exps[0]; total += exps[1]; total += exps[2]; total += exps[3];
   }
-  float lanes[4];
-  _mm_storeu_ps(lanes, acc);
-  double total = (double) lanes[0] + (double) lanes[1] + (double) lanes[2] + (double) lanes[3];
   for (; iter != end; iter++){
     double diff = *iter - max_val;
     if (diff > LOG_THRESH)

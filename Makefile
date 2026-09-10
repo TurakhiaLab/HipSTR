@@ -9,22 +9,60 @@
 ## `make pgo` is also available (see the PGO section below) but is currently
 ## measured slower than a plain build on this toolchain -- not recommended.
 
+## Probe whether this toolchain can both emit AND link glibc's vector exp.
+## Testing for -lmvec alone is not enough: mathops.cpp's "#pragma omp declare
+## simd" is what makes GCC emit _ZGVbN2v_exp and friends, and it does so
+## whenever -fopenmp-simd is on, whether or not libmvec exists in the target
+## sysroot -- so a missing library surfaces as undefined references at link
+## time rather than as a missing -l. The probe therefore compiles and links a
+## loop that actually goes through that path, and both halves are enabled
+## together or not at all. glibc only gained libmvec in 2.22, and conda-forge's
+## default 2.17 sysroot ships none, which is the case this exists to handle.
+## _Pragma is used rather than "#pragma" because a literal # would start a
+## comment here.
+HAVE_LIBMVEC := $(shell printf '%s\n' \
+	'_Pragma("omp declare simd notinbranch") extern "C" double exp(double);' \
+	'double f(const double* a, long n){ double s = 0;' \
+	'_Pragma("omp simd reduction(+:s)")' \
+	'for (long i = 0; i < n; i++) s += exp(a[i]); return s; }' \
+	'int main(){ return 0; }' \
+	| $(CXX) -x c++ -O2 -fopenmp-simd - -lmvec -o /dev/null 2>/dev/null && echo yes)
+
+ifeq ($(HAVE_LIBMVEC),yes)
+SIMD_MATH_FLAGS := -fopenmp-simd -DHAVE_LIBMVEC
+MVEC_LIB        := -lmvec
+else
+SIMD_MATH_FLAGS :=
+MVEC_LIB        :=
+endif
+
 ## Default compilation flags.
 ## Override with:
 ##   make CXXFLAGS=XXXXX
 ## -flto=auto enables link-time optimization across all translation units.
-## -fopenmp-simd enables recognition of "#pragma omp simd"/"declare simd"
-## (mathops.cpp uses it to vectorize log_sum_exp's reduction via libmvec's
-## vector exp -- see -lmvec below). It does not pull in libgomp or any
-## OpenMP runtime; Taskflow remains the only threading in this codebase.
-CXXFLAGS= -O3 -g -flto=auto -fopenmp-simd -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
+## $(SIMD_MATH_FLAGS) carries -fopenmp-simd, which enables recognition of
+## "#pragma omp simd"/"declare simd" (mathops.cpp uses it to vectorize
+## log_sum_exp's reduction via libmvec's vector exp), plus the matching
+## -DHAVE_LIBMVEC -- see the probe above for why they move together. It does
+## not pull in libgomp or any OpenMP runtime; Taskflow remains the only
+## threading in this codebase.
+## The leading $(CXXFLAGS) keeps whatever the environment already set, instead
+## of discarding it. A plain `=` assignment takes precedence over the
+## environment in GNU Make, which silently dropped the flags that packaging
+## toolchains rely on -- conda-build passes `-isystem $PREFIX/include` and
+## `-L$PREFIX/lib -Wl,-rpath,$PREFIX/lib` this way to point the build at its own
+## zlib/bzip2/xz/libcurl/openssl. The environment's flags go first so that this
+## project's own settings win where the two conflict (conda-build passes -O2;
+## later flags beat earlier ones in GCC, so -O3 below has to come after it).
+## `:=` is required here: a recursive `=` that refers to itself is an infinite
+## recursion error. Overriding on the command line (`make CXXFLAGS=...`) still
+## wins over both, as documented above.
+CXXFLAGS := $(CXXFLAGS) -O3 -g -flto=auto $(SIMD_MATH_FLAGS) -D__STDC_LIMIT_MACROS -D_FILE_OFFSET_BITS=64 -std=c++20 -DMACOSX -pthread -Itaskflow  #-pedantic -Wunreachable-code -Weverything
 
 ## To create a static distribution file, run:
 ##   make static-dist
 ifeq ($(STATIC),1)
-LDFLAGS=-static 
-else
-LDFLAGS= 
+LDFLAGS := -static $(LDFLAGS)
 endif
 
 ## Source code files, add new files to this list
@@ -59,7 +97,9 @@ MIMALLOC_LIB  = $(MIMALLOC_ROOT)/build/libmimalloc.a
 LIBDEFLATE_ROOT = lib/libdeflate
 LIBDEFLATE_LIB  = $(LIBDEFLATE_ROOT)/build/libdeflate.a
 
-LIBS = -L./ -lm -lmvec -L$(HTSLIB_ROOT)/ -lz -lcurl -lcrypto -L$(CEPHES_ROOT)/ -llzma -lbz2 $(LIBDEFLATE_LIB) -Wl,--whole-archive $(MIMALLOC_LIB) -Wl,--no-whole-archive
+# $(MVEC_LIB) is -lmvec, or empty when the probe near the top of this file
+# found the toolchain cannot use glibc's vector exp -- see it for details.
+LIBS = -L./ -lm $(MVEC_LIB) -L$(HTSLIB_ROOT)/ -lz -lcurl -lcrypto -L$(CEPHES_ROOT)/ -llzma -lbz2 $(LIBDEFLATE_LIB) -Wl,--whole-archive $(MIMALLOC_LIB) -Wl,--no-whole-archive
 INCLUDE   = -Ilib -Ilib/htslib -Itaskflow -I$(MIMALLOC_ROOT)/include -I$(LIBDEFLATE_ROOT)
 CEPHES_LIB        = lib/cephes/libprob.a
 HTSLIB_LIB        = $(HTSLIB_ROOT)/libhts.a
@@ -194,16 +234,21 @@ test/vcf_snp_tree_test: test/vcf_snp_tree_test.cpp src/error.cpp src/snp_tree.cp
 
 # Build each object file independently
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -o $@ -c $<
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(INCLUDE) -MMD -MP -o $@ -c $<
 
-# Rebuild CEPHES library if needed
+# Rebuild CEPHES library if needed.
+# CC is forwarded on the command line because lib/cephes/Makefile hardcodes
+# `CC = gcc`, and a makefile assignment beats the environment in GNU Make --
+# so without this it ignores $CC and demands a compiler literally named gcc,
+# which cross-compiling toolchains (conda-build's among them) do not provide.
+# A command-line assignment outranks the sub-makefile's own. Same for htslib.
 $(CEPHES_LIB):
-	cd lib/cephes && $(MAKE)
+	cd lib/cephes && $(MAKE) CC="$(CC)"
 
 # Rebuild htslib library if needed. Needs libdeflate built first so its
 # header/lib are present for HAVE_LIBDEFLATE (see lib/htslib/config.h).
 $(HTSLIB_LIB): $(LIBDEFLATE_LIB)
-	cd lib/htslib && $(MAKE) lib-static CPPFLAGS="-I$(CURDIR)/$(LIBDEFLATE_ROOT) -DHAVE_LIBDEFLATE"
+	cd lib/htslib && $(MAKE) lib-static CC="$(CC)" CPPFLAGS="$(CPPFLAGS) -I$(CURDIR)/$(LIBDEFLATE_ROOT) -DHAVE_LIBDEFLATE"
 
 # ====================================================================
 # 5b. THE BUILD RECIPE FOR LIBDEFLATE (vendored; CMake-only upstream build)
