@@ -57,29 +57,69 @@ Treating that comparability as a hard constraint drove two trade-offs. Multiply-
 
 Thread safety required eliminating two pieces of shared mutable state: `StutterAlignerClass`'s scratch buffers, moved into a per-`HapAligner` workspace, and the non-reentrant Cephes `bdtr` function, now mutex-guarded. Further optimizations include a shared chromosome cache, mimalloc [@leijen2019], an htslib upgrade, and SIMD dispatch via compiler target clones — improving single-threaded performance as well. Three additive flags extend the CLI without breaking backward compatibility.
 
-| Category | Change | Effect |
-|---|---|---|
-| Parallelization | Taskflow pipeline | Reads, filters, and writes regions across three concurrent stages. |
-| Parallelization | SNP-phasing safety | Mutexes protect shared phasing state across worker threads. |
-| Parallelization | Output buffering | Per-thread output buffers are flushed in original region order. |
-| Parallelization | Lock-free VCF records | Workers render VCF lines as text without holding the output lock. |
-| Parallelization | `--threads` flag | Sets worker thread count; auto-detected from hardware if unset. |
-| Thread safety | StutterAligner buffers | Per-`HapAligner` scratch buffers eliminate a shared-state race. |
-| Thread safety | Cephes `bdtr` mutex | Guards a non-reentrant function used in allele-bias computation. |
-| Memory | HapAligner buffer reuse | Reuses per-aligner scratch buffers across reads instead of reallocating. |
-| Memory | ASCII case conversion | Replaces locale-aware `toupper`/`tolower` in hot per-base loops. |
-| Memory | `fast_log_sum_exp` overload | Pointer-pair variant avoids a vector copy at call sites. |
-| Memory | mimalloc | Reduces allocator overhead from small per-read/per-locus allocations. |
-| Memory | Chromosome cache + eviction | Chromosomes shared across workers instead of duplicating per thread. Evicted once there are no workers using it. |
-| Vectorization | `-flto=auto` | Enables link-time optimization across translation units. |
-| Vectorization | `target_clones` dispatch | Builds one code variant per ISA; dispatches to the best at runtime. |
-| Vectorization | libmvec `exp()` | Vectorizes the exponential reduction with correctly-rounded results. |
-| Vectorization | SSE batching | Processes four elements per instruction via `vfasterexp()`. |
-| Vectorization | `-ffp-contract=off` | Disables multiply-add fusion to keep output bit-identical across ISAs. |
-| Dependency/IO | htslib 1.9 -> 1.24 | Replaces byte-at-a-time FASTA reads with a block-read implementation. |
-| Dependency/IO | libdeflate enabled | Activates a previously unused BGZF decompression path. |
-| CLI flags | `--lib-from-samp` | Assigns library name from sample name when LB tags are absent. |
-| CLI flags | `--output-hap-fields` | Adds extra FORMAT fields describing full assembled haplotypes. |
++-----------------+-----------------------------+------------------------------------------------------------+
+| Category        | Change                      | Effect                                                     |
++=================+=============================+============================================================+
+| Parallelization | Taskflow pipeline           | Reads, filters, and writes regions across three concurrent |
+|                 |                             | stages.                                                    |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | SNP-phasing safety          | Mutexes protect shared phasing state across worker         |
+|                 |                             | threads.                                                   |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | Output buffering            | Per-thread output buffers are flushed in original region   |
+|                 |                             | order.                                                     |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | Lock-free VCF records       | Workers render VCF lines as text without holding the       |
+|                 |                             | output lock.                                               |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | `--threads` flag            | Sets worker thread count; auto-detected from hardware if   |
+|                 |                             | unset.                                                     |
++-----------------+-----------------------------+------------------------------------------------------------+
+| Thread safety   | StutterAligner buffers      | Per-`HapAligner` scratch buffers eliminate a shared-state  |
+|                 |                             | race.                                                      |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | Cephes `bdtr` mutex         | Guards a non-reentrant function used in allele-bias        |
+|                 |                             | computation.                                               |
++-----------------+-----------------------------+------------------------------------------------------------+
+| Memory          | HapAligner buffer reuse     | Reuses per-aligner scratch buffers across reads instead of |
+|                 |                             | reallocating.                                              |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | ASCII case conversion       | Replaces locale-aware `toupper`/`tolower` in hot per-base  |
+|                 |                             | loops.                                                     |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | `fast_log_sum_exp` overload | Pointer-pair variant avoids a vector copy at call sites.   |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | mimalloc                    | Reduces allocator overhead from small per-read/per-locus   |
+|                 |                             | allocations.                                               |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | Chromosome cache + eviction | Chromosomes shared across workers instead of duplicating   |
+|                 |                             | per thread. Evicted once there are no workers using it.    |
++-----------------+-----------------------------+------------------------------------------------------------+
+| Vectorization   | `-flto=auto`                | Enables link-time optimization across translation units.   |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | `target_clones` dispatch    | Builds one code variant per ISA; dispatches to the best at |
+|                 |                             | runtime.                                                   |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | libmvec `exp()`             | Vectorizes the exponential reduction with correctly-       |
+|                 |                             | rounded results.                                           |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | SSE batching                | Processes four elements per instruction via                |
+|                 |                             | `vfasterexp()`.                                            |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | `-ffp-contract=off`         | Disables multiply-add fusion to keep output bit-identical  |
+|                 |                             | across ISAs.                                               |
++-----------------+-----------------------------+------------------------------------------------------------+
+| Dependency/IO   | htslib 1.9 -> 1.24          | Replaces byte-at-a-time FASTA reads with a block-read      |
+|                 |                             | implementation.                                            |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | libdeflate enabled          | Activates a previously unused BGZF decompression path.     |
++-----------------+-----------------------------+------------------------------------------------------------+
+| CLI flags       | `--lib-from-samp`           | Assigns library name from sample name when LB tags are     |
+|                 |                             | absent.                                                    |
+|                 +-----------------------------+------------------------------------------------------------+
+|                 | `--output-hap-fields`       | Adds extra FORMAT fields describing full assembled         |
+|                 |                             | haplotypes.                                                |
++-----------------+-----------------------------+------------------------------------------------------------+
 
 Table 1: Summary of code-level changes introduced in HipSTR-MT, grouped by category (parallelization, thread safety, memory, vectorization, dependency/I/O, and CLI flags), with the effect of each change on behavior or performance. Full implementation detail for each entry is provided in the repository README.
 
