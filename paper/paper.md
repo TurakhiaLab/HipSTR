@@ -51,7 +51,7 @@ HipSTR is one of several tools for genome-wide STR genotyping from short-read da
 
 # Software Design
 
-The unit of work is the genomic region: regions are independent under HipSTR's model and map cleanly onto the existing per-locus loop. Rather than a parallel loop over regions, HipSTR-MT uses the three-stage Taskflow pipeline in Figure 1: serial dispatch, parallel workers, serial ordered output. The serial stages bound achievable scaling, but they let the tool emit VCF, log, and BAM records in the original region order regardless of which worker finishes first, keeping output directly comparable with the serial tool.
+The unit of work is the genomic region: regions are independent under HipSTR's model and map cleanly onto the existing per-locus loop. Rather than a parallel loop over regions, HipSTR-MT uses the three-stage Taskflow pipeline in \autoref{fig:pipeline}: serial dispatch, parallel workers, serial ordered output. The serial stages bound achievable scaling, but they let the tool emit VCF, log, and BAM records in the original region order regardless of which worker finishes first, keeping output directly comparable with the serial tool.
 
 Treating that comparability as a hard constraint drove two trade-offs. Multiply-add contraction is disabled (`-ffp-contract=off`), giving up vectorization headroom to keep results bit-identical across instruction sets, since silent numerical divergence would make the fork unusable as a drop-in replacement. Each worker also keeps four region contexts in flight, with independent reader and alignment state, so the work-stealing scheduler can hide I/O and memory latency; this raises peak memory from ~1.6 GB to ~8 GB at 64 threads, favoring wall-clock time on machines where cores are scarcer than RAM.
 
@@ -100,8 +100,8 @@ Thread safety required eliminating two pieces of shared mutable state: `StutterA
 |                 | `target_clones` dispatch    | Builds one code variant per ISA; dispatches to the best at |
 |                 |                             | runtime.                                                   |
 |                 +-----------------------------+------------------------------------------------------------+
-|                 | libmvec `exp()`             | Vectorizes the exponential reduction with correctly-       |
-|                 |                             | rounded results.                                           |
+|                 | libmvec `exp()`             | Vectorizes the exponential reduction with                  |
+|                 |                             | correctly-rounded results.                                 |
 |                 +-----------------------------+------------------------------------------------------------+
 |                 | SSE batching                | Processes four elements per instruction via                |
 |                 |                             | `vfasterexp()`.                                            |
@@ -121,7 +121,7 @@ Thread safety required eliminating two pieces of shared mutable state: `StutterA
 |                 |                             | haplotypes.                                                |
 +-----------------+-----------------------------+------------------------------------------------------------+
 
-Table 1: Summary of code-level changes introduced in HipSTR-MT, grouped by category (parallelization, thread safety, memory, vectorization, dependency/I/O, and CLI flags), with the effect of each change on behavior or performance. Full implementation detail for each entry is provided in the repository README.
+: Summary of code-level changes introduced in HipSTR-MT, grouped by category (parallelization, thread safety, memory, vectorization, dependency/I/O, and CLI flags), with the effect of each change on behavior or performance. Full implementation detail for each entry is provided in the repository README.
 
 # Performance and correctness
 
@@ -134,17 +134,17 @@ Benchmarks used the NA12891 sample (accession ERR194160) against the genome-wide
   --str-vcf output.vcf.gz --min-reads 25 --def-stutter-model --threads N
 ```
 
-with N ∈ {1, 2, 4, 8, 16, 32, 64}, measured via `/usr/bin/time -v` on dual Intel Xeon Silver 4216 CPUs (64 logical CPUs), Ubuntu 22.04. HipSTR-MT at 64 threads finishes in 24.6 minutes versus 13.3 hours for the unmodified serial baseline (a 32.5× reduction) already including the non-parallel optimizations above, so even single-threaded HipSTR-MT is measurably faster than upstream. Scaling is near-linear through 16 threads (94% efficiency), tapering to 51% by 64 threads as SMT contention and the pipeline's mandatory serial stages dominate; per-locus haplotype alignment and traceback work is small, memory-irregular, and imbalanced across loci, leaving some workers idle.
+with $N \in \{1, 2, 4, 8, 16, 32, 64\}$, measured via `/usr/bin/time -v` on dual Intel Xeon Silver 4216 CPUs (64 logical CPUs), Ubuntu 22.04. As \autoref{fig:performance} shows, HipSTR-MT at 64 threads finishes in 24.6 minutes versus 13.3 hours for the unmodified serial baseline (a 32.5× reduction), already including the non-parallel optimizations above, so even single-threaded HipSTR-MT is measurably faster than upstream. Scaling is near-linear through 16 threads (94% efficiency), tapering to 51% by 64 threads as SMT contention and the pipeline's mandatory serial stages dominate; per-locus haplotype alignment and traceback work is small, memory-irregular, and imbalanced across loci, leaving some workers idle.
 
-Output equivalence was verified at every thread count with a tolerant VCF comparator requiring exact genotype-call matches and allowing ≤1e-3 relative drift in floating-point fields (GLDIFF, PDP) from SIMD/codegen-dependent summation order. All genotype records were identical across thread counts. Maximum RSS grows with in-flight regions: ~8 GB at 64 threads versus ~1.6 GB at 1 thread.
+Output equivalence was verified at every thread count with a tolerant VCF comparator requiring exact genotype-call matches and allowing $\leq 10^{-3}$ relative drift in floating-point fields (GLDIFF, PDP) from SIMD/codegen-dependent summation order. All genotype records were identical across thread counts. Maximum RSS grows with in-flight regions: ~8 GB at 64 threads versus ~1.6 GB at 1 thread.
 
 # Research Impact
 
-HipSTR-MT is a recent release, so its significance rests on the established user base it serves together with the performance and equivalence results above. The original HipSTR has been cited in over 330 publications since 2017 [@willems2017] and underpins large-scale STR resources. It profiled autosomal STRs in 1,916 individuals from 479 Simons Simplex Collection family quads–a mean of 1.14 million STRs per sample–for the first genome-wide SNP + STR imputation reference panel [@saini2018], and it is one of four genotypers combined by EnsembleTR into a catalog of more than 1.7 million tandem repeat loci across 3,550 individuals from the 1000 Genomes Project and H3Africa cohorts [@ziaeijam2023]. It has also been repackaged by an independent group as a graphical front end for routine forensic casework [@frontanilla2026]. Because HipSTR-MT produces genotype-identical output and preserves the command-line interface apart from three additive flags, these workflows can adopt it without re-validating existing call sets.
+HipSTR-MT is a recent release, so its significance rests on the established user base it serves together with the performance and equivalence results above. The original HipSTR has been cited in over 330 publications since 2017 [@willems2017] and underpins large-scale STR resources. It profiled autosomal STRs in 1,916 individuals from 479 Simons Simplex Collection family quads---a mean of 1.14 million STRs per sample---for the first genome-wide SNP + STR imputation reference panel [@saini2018], and it is one of four genotypers combined by EnsembleTR into a catalog of more than 1.7 million tandem repeat loci across 3,550 individuals from the 1000 Genomes Project and H3Africa cohorts [@ziaeijam2023]. It has also been repackaged by an independent group as a graphical front end for routine forensic casework [@frontanilla2026]. Because HipSTR-MT produces genotype-identical output and preserves the command-line interface apart from three additive flags, these workflows can adopt it without re-validating existing call sets.
 
 # Acknowledgements
 
-We thank Gymrek and Turakhia lab members at UCSD for feedback and for providing the motivation and test data for this project. HipSTR-MT is a performance fork of HipSTR, originally developed by Thomas Willems and maintained by the Gymrek lab (gymrek-lab/HipSTR). Our fork is available at https://github.com/TurakhiaLab/HipSTR-MT under GPL v2, and we track upstream developments and intend to maintain it as an ongoing open-source project.
+We thank Gymrek and Turakhia lab members at UCSD for feedback and for providing the motivation and test data for this project. HipSTR-MT is a performance fork of HipSTR, originally developed by Thomas Willems and maintained by the Gymrek lab (gymrek-lab/HipSTR). Our fork is available at <https://github.com/TurakhiaLab/HipSTR-MT> under GPL v2, and we track upstream developments and intend to maintain it as an ongoing open-source project.
 
 # AI usage disclosure
 
